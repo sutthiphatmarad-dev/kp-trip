@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: kamphaeng-trip
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.14
+      # คีย์สองตัวนี้ตั้ง sync:false = Render จะให้กรอกใน dashboard
+      # (กันคีย์รั่วเพราะไฟล์นี้อยู่ใน git)
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false
