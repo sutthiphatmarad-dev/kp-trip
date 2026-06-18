@@ -111,7 +111,7 @@
     </div>
 </div>
 
-<script async defer src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&libraries=places"></script>
+<script async src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&libraries=places&loading=async&callback=initMap"></script>
 
 <script>
     let map;
@@ -121,6 +121,8 @@
     
     const dailyBudgetsStr = "{{ daily_budgets | join(',') }}";
     const dailyBudgets = dailyBudgetsStr.split(',');
+    const fuelConsumption = parseFloat("{{ fuel_consumption }}") || 15;
+    const fuelPrice = parseFloat("{{ fuel_price }}") || 38;
     let currentDayFilter = 'all'; 
 
     function recalcBudget() {
@@ -160,7 +162,10 @@
     function initMap() {
         map = new google.maps.Map(document.getElementById('map'), {
             zoom: 11, center: {lat: 16.4828, lng: 99.5227},
-            mapTypeControl: true, streetViewControl: true, scrollwheel: true, gestureHandling: 'greedy' 
+            mapTypeControl: true, streetViewControl: true,
+            scrollwheel: true, gestureHandling: 'greedy',
+            zoomControl: true, disableDefaultUI: false,
+            minZoom: 5, maxZoom: 20
         });
         directionsService = new google.maps.DirectionsService();
         directionsRenderer = new google.maps.DirectionsRenderer({
@@ -315,6 +320,8 @@
                     let optBtn = document.getElementById('optimizeBtn');
                     optBtn.innerHTML = '<i class="fas fa-check-circle me-2"></i> จัดเรียงเส้นทางสำเร็จ!';
                     setTimeout(() => calculateAndDisplayRoute(false), 500); 
+                } else {
+                    applyFuelCosts(response.routes[0].legs, validRows);
                 }
             } else {
                 console.error("Directions API ล่มจ้า สาเหตุ: " + status);
@@ -322,6 +329,21 @@
                 window.fallbackPolyline.setMap(map);
             }
         });
+        recalcBudget();
+    }
+
+    // ข้อ 6: คำนวณค่าน้ำมันจากระยะทางจริง (กม.) / อัตราสิ้นเปลือง x ราคาน้ำมัน
+    function applyFuelCosts(legs, rows) {
+        if (!rows || rows.length === 0 || !legs) return;
+        const firstFuel = rows[0].querySelector('.price-fuel');
+        if (firstFuel) firstFuel.value = 0;  // จุดเริ่ม ยังไม่ได้ขับ = 0
+        for (let i = 0; i < legs.length && (i + 1) < rows.length; i++) {
+            const distKm = (legs[i].distance ? legs[i].distance.value : 0) / 1000;
+            const liters = fuelConsumption > 0 ? (distKm / fuelConsumption) : 0;
+            const cost = Math.round(liters * fuelPrice);
+            const fuelInput = rows[i + 1].querySelector('.price-fuel');
+            if (fuelInput) fuelInput.value = cost;
+        }
         recalcBudget();
     }
 
@@ -491,7 +513,61 @@
         });
     }
 
-    window.onload = initMap;
+    // ===== ข้อ 8: ระบบแชทน้องไกด์ AI =====
+    function toggleChat() {
+        const box = document.getElementById('chatBox');
+        const opened = (box.style.display !== 'none' && box.style.display !== '');
+        box.style.display = opened ? 'none' : 'flex';
+    }
+
+    function handleChatEnter(event) {
+        if (event.key === 'Enter') { event.preventDefault(); sendMessage(); }
+    }
+
+    function appendChat(text, who) {
+        const history = document.getElementById('chatHistory');
+        const wrap = document.createElement('div');
+        wrap.className = 'd-flex ' + (who === 'user' ? 'justify-content-end' : 'justify-content-start');
+        const bubble = document.createElement('div');
+        bubble.className = (who === 'user' ? 'bg-success text-white' : 'bg-white text-dark border') + ' p-2 rounded-3 shadow-sm';
+        bubble.style.maxWidth = '80%';
+        bubble.style.fontSize = '0.9rem';
+        bubble.innerText = text;
+        wrap.appendChild(bubble);
+        history.appendChild(wrap);
+        history.scrollTop = history.scrollHeight;
+        return bubble;
+    }
+
+    async function sendMessage() {
+        const input = document.getElementById('chatInput');
+        const msg = input.value.trim();
+        if (!msg) return;
+        appendChat(msg, 'user');
+        input.value = '';
+        const thinking = appendChat('กำลังคิด...', 'bot');
+        try {
+            const res = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: msg })
+            });
+            const data = await res.json();
+            thinking.innerText = data.response || 'ขออภัยครับ ตอบไม่ได้ตอนนี้ ลองใหม่อีกครั้งนะครับ';
+        } catch (e) {
+            thinking.innerText = 'เชื่อมต่อไม่ได้ ลองใหม่อีกครั้งนะครับ 🙏';
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        const toggleBtn = document.getElementById('chatToggleBtn');
+        const closeBtn = document.getElementById('closeChatBtn');
+        if (toggleBtn) toggleBtn.addEventListener('click', toggleChat);
+        if (closeBtn) closeBtn.addEventListener('click', toggleChat);
+    });
+
+    // ให้ Google Maps เรียก initMap ได้ผ่าน callback (แก้ปัญหาแผนที่ค้าง/ซูมไม่ได้)
+    window.initMap = initMap;
 </script>
 </body>
 </html>

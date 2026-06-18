@@ -58,7 +58,7 @@
 
         .custom-input {
             border: 2px solid #198754 !important; color: #198754 !important; background-color: #f4fbf6 !important;
-            font-weight: bold; transition: all 0.3s ease;
+            font-weight: 400; transition: all 0.3s ease;
         }
         .custom-input:focus, .custom-input:active {
             background-color: #ffffff !important; color: #198754 !important; border-color: #146c43 !important;
@@ -151,7 +151,7 @@
                         <label class="fw-bold text-success">งบที่พัก (ต่อคืน)</label>
                         <div class="input-group">
                             <span class="input-group-text bg-success text-white border-success">฿</span>
-                            <input type="number" name="hotel_budget" class="form-control custom-input" value="1000" required>
+                            <input type="number" name="hotel_budget" class="form-control custom-input" value="1000" min="500" required>
                         </div>
                     </div>
                 </div>
@@ -293,6 +293,16 @@
             let html = `
                 <div class="day-box shadow-sm">
                     <h6 class="fw-bold text-dark"><i class="fas fa-route text-success"></i> วันที่ ${i} <span class="text-danger">*</span></h6>
+                    <div class="mb-2">
+                        <label class="form-label text-success fw-bold mb-1" style="font-size: 0.85rem;"><i class="fas fa-map-pin"></i> จำนวนสถานที่ที่อยากเที่ยววันนี้:</label>
+                        <select class="form-select form-select-sm custom-input d-inline-block" name="places_per_day[]" style="width: auto; min-width: 120px;">
+                            <option value="4">4 ที่</option>
+                            <option value="5">5 ที่</option>
+                            <option value="6" selected>6 ที่</option>
+                            <option value="7">7 ที่</option>
+                            <option value="8">8 ที่</option>
+                        </select>
+                    </div>
                     <div class="row g-2">
                         <div class="col-md-2">
                             <label class="form-label text-muted" style="font-size: 0.85rem;"><i class="fas fa-clock"></i> เริ่ม:</label>
@@ -304,7 +314,7 @@
                         </div>
                         <div class="col-md-2">
                             <label class="form-label text-success fw-bold" style="font-size: 0.85rem;"><i class="fas fa-wallet"></i> งบวันนี้(฿):</label>
-                            <input type="number" class="form-control form-control-sm custom-input day-budget-input" name="daily_budget[]" value="1500" min="1000" required>
+                            <input type="number" class="form-control form-control-sm custom-input day-budget-input" name="daily_budget[]" value="1500" min="500" required>
                         </div>
                         <div class="col-md-3">
                             <label class="form-label text-muted" style="font-size: 0.85rem;">เริ่มทริปจาก: <span class="text-danger">*</span></label>
@@ -376,8 +386,8 @@
         // 1. เช็คว่า "งบรายวัน" ต่ำกว่า 1000 ไหม?
         const dailyBudgets = document.querySelectorAll('.day-budget-input');
         for (let i = 0; i < dailyBudgets.length; i++) {
-            if (parseInt(dailyBudgets[i].value) < 1000 || dailyBudgets[i].value === "") {
-                alert("⚠️ กรุณาระบุ 'งบประมาณรายวัน' ไม่ต่ำกว่า 1,000 บาท/วัน ครับ เพื่อให้ AI จัดทริปได้อย่างสมบูรณ์");
+            if (parseInt(dailyBudgets[i].value) < 500 || dailyBudgets[i].value === "") {
+                alert("⚠️ กรุณาระบุ 'งบประมาณรายวัน' ไม่ต่ำกว่า 500 บาท/วัน ครับ เพื่อให้ AI จัดทริปได้อย่างสมบูรณ์");
                 dailyBudgets[i].focus();
                 event.preventDefault(); 
                 return false;
