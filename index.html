@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <title>K-Phet Guide - วางแผนเที่ยวกำแพงเพชร</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;700&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <style>
+        body { background-color: #f4fbf6; font-family: 'Sarabun', sans-serif; }
+        .hero-header {
+            position: relative;
+            background-image: url('https://travel.mthai.com/app/uploads/2018/09/P9090593.jpg');
+            background-size: cover; background-position: center; color: white; 
+            padding: 60px 20px; text-align: center; border-radius: 0 0 30px 30px;
+            box-shadow: 0 10px 30px rgba(25, 135, 84, 0.3); margin-bottom: 30px; overflow: hidden; 
+        }
+        .hero-header::before {
+            content: ''; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 40, 15, 0.55); z-index: 1;
+        }
+        .hero-header h1, .hero-header p { position: relative; z-index: 2; }
+        .form-card {
+            background: white; border-radius: 20px; box-shadow: 0 15px 35px rgba(0,0,0,0.05);
+            padding: 30px; margin-bottom: 50px; border: 1px solid #e2f0e6;
+        }
+        .section-title { font-weight: 700; color: #198754; margin-bottom: 15px; border-left: 5px solid #198754; padding-left: 10px; }
+        #pickerMap { height: 500px; width: 100%; border-radius: 8px; }
+        
+        .btn-check:checked + label { 
+            background-color: #198754 !important; 
+            color: #ffffff !important; 
+            border-color: #198754 !important;
+            box-shadow: 0 4px 10px rgba(25,135,84,0.4);
+        }
+        .style-label {
+            background-color: #ffffff; color: #198754; border: 1px solid #198754; transition: all 0.2s ease-in-out;
+        }
+        .style-label:hover { background-color: #e2f0e6; }
+        
+        #loadingOverlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(5px);
+            z-index: 9999; display: none; flex-direction: column; align-items: center; justify-content: center;
+        }
+        .loader-spinner { width: 60px; height: 60px; border: 6px solid #e2f0e6; border-top: 6px solid #198754; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .loading-text { font-size: 1.5rem; font-weight: bold; color: #198754; }
+        .day-box { background-color: #eaf6ed; border-left: 4px solid #198754; border-radius: 8px; padding: 15px; margin-bottom: 15px; }
+        
+        .box-green { background-color: #f4fbf6; border: 2px solid #198754; border-radius: 12px; }
+
+        .custom-input {
+            border: 2px solid #198754 !important; color: #198754 !important; background-color: #f4fbf6 !important;
+            font-weight: 400; transition: all 0.3s ease;
+        }
+        .custom-input:focus, .custom-input:active {
+            background-color: #ffffff !important; color: #198754 !important; border-color: #146c43 !important;
+            box-shadow: 0 0 10px rgba(25,135,84,0.3) !important; outline: none;
+        }
+        .custom-input::placeholder { color: #8ac0a0; font-weight: normal; }
+    </style>
+</head>
+<body>
+
+<div id="loadingOverlay">
+    <div class="loader-spinner"></div>
+    <div class="loading-text" id="loadingMsg">กำลังให้ AI สร้างแผนเที่ยว...</div>
+</div>
+
+<div class="hero-header">
+    <h1 class="fw-bold"><i class="fas fa-leaf"></i> KP Smart Travel </h1>
+    <p class="mb-0">วางแผนเที่ยวกำแพงเพชรอัจฉริยะ ด้วย AI</p>
+</div>
+
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-lg-10">
+            <form action="/api/plan" method="POST" class="form-card" id="planForm" onsubmit="return validateForm(event)">
+                
+                <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center mb-3">
+                    <h5 class="section-title mb-3 mb-md-0"><i class="fas fa-calendar-day"></i> กำหนดจุดเริ่มต้น-สิ้นสุด ของแต่ละวัน</h5>
+                    <div class="d-flex align-items-center gap-2 bg-light p-2 rounded border border-success">
+                        <label class="form-label fw-bold mb-0 text-nowrap text-success"><i class="fas fa-clock"></i> เดินทางกี่วัน?</label>
+                        <select class="form-select custom-input py-1" name="num_days" id="num_days" onchange="generateDayInputs()" style="width: auto; min-width: 100px;">
+                            <option value="1">1 วัน</option>
+                            <option value="2">2 วัน</option>
+                            <option value="3">3 วัน</option>
+                            <option value="4">4 วัน</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div id="dailyRoutesContainer"></div>
+
+                <hr class="my-4">
+
+                <h5 class="section-title"><i class="fas fa-car"></i> พาหนะ & ค่าน้ำมัน & งบที่พัก</h5>
+                
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <label class="form-label fw-bold">ประเภทรถ</label>
+                        <select name="vehicle_type" id="vehicleSelect" class="form-select custom-input" onchange="updateConsumptionDefault()">
+                            <option value="รถยนต์ทั่วไป (Sedan)" selected>🚗 รถเก๋ง (1.5-1.8L)</option>
+                            <option value="รถอีโคคาร์ (Eco Car)">🚙 อีโคคาร์ (1.0-1.2L)</option>
+                            <option value="รถอเนกประสงค์ (SUV/PPV)">🚙 SUV / รถครอบครัว</option>
+                            <option value="รถกระบะ (Pickup)">🛻 รถกระบะ</option>
+                            <option value="รถตู้ (Van)">🚐 รถตู้เช่า</option>
+                            <option value="มอเตอร์ไซค์ (Motorcycle)">🛵 มอเตอร์ไซค์ (เล็ก)</option>
+                            <option value="บิ๊กไบค์ (Big Bike)">🏍️ บิ๊กไบค์</option>
+                            <option value="รถยนต์ไฟฟ้า (EV)">⚡ รถยนต์ไฟฟ้า (EV)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="col-md-3">
+                        <label class="form-label fw-bold">ชนิดเชื้อเพลิง</label>
+                        <select name="fuel_type" id="fuelTypeSelect" class="form-select custom-input" onchange="updateFuelPrice()">
+                            <option value="แก๊สโซฮอล์ 95">แก๊สโซฮอล์ 95</option>
+                            <option value="แก๊สโซฮอล์ 91">แก๊สโซฮอล์ 91</option>
+                            <option value="E20">E20</option>
+                            <option value="E85">E85</option>
+                            <option value="ดีเซล">ดีเซล</option>
+                            <option value="ดีเซล พรีเมียม">ดีเซล พรีเมียม</option>
+                            <option value="ไฟฟ้า (EV)">ชาร์จไฟฟ้า (บาท/หน่วย)</option>
+                        </select>
+                    </div>
+
+                    <div class="col-md-3">
+                        <label class="form-label fw-bold">อัตราสิ้นเปลือง</label>
+                        <div class="input-group">
+                            <input type="number" step="0.1" name="fuel_consumption" id="consumptionInput" class="form-control custom-input" value="15.0" required>
+                            <span class="input-group-text bg-success text-white border-success" id="unitLabel">กม./ลิตร</span>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-3">
+                        <label class="form-label fw-bold">ราคาเชื้อเพลิง</label>
+                        <div class="input-group">
+                            <input type="number" step="0.01" name="fuel_price" id="fuelPriceInput" class="form-control custom-input" value="37.50" required>
+                            <span class="input-group-text bg-success text-white border-success">บาท</span>
+                        </div>
+                    </div>
+
+                    <div class="col-md-4 mt-3">
+                        <label class="fw-bold text-success">งบที่พัก (ต่อคืน)</label>
+                        <div class="input-group">
+                            <span class="input-group-text bg-success text-white border-success">฿</span>
+                            <input type="number" name="hotel_budget" class="form-control custom-input" value="1000" min="500" required>
+                        </div>
+                    </div>
+                </div>
+
+                <hr class="my-4">
+
+                <h5 class="section-title"><i class="fas fa-heart"></i> สไตล์ที่ชอบ (เลือกกี่อันก็ได้)</h5>
+                
+                <div class="row g-4 mb-4">
+                    <div class="col-md-6">
+                        <div class="p-3 h-100 box-green shadow-sm" id="placeBox">
+                            <label class="form-label fw-bold text-success fs-5 mb-3"><i class="fas fa-map-signs"></i> ประเภทสถานที่เที่ยว <span class="text-danger">*</span></label>
+                            <div class="d-flex flex-wrap gap-2">
+                                <input type="checkbox" class="btn-check place-ai-check place-group" name="place_styles" id="p_ai" value="AI_Select" checked>
+                                <label class="btn rounded-pill btn-sm fw-bold style-label shadow-sm" for="p_ai">✨ ให้ AI เลือกที่เที่ยวให้</label>
+                                
+                                <input type="checkbox" class="btn-check place-manual-check place-group" name="place_styles" id="p1" value="ธรรมชาติ ภูเขา น้ำตก">
+                                <label class="btn rounded-pill btn-sm style-label" for="p1">🌳 ธรรมชาติ/น้ำตก</label>
+                                
+                                <input type="checkbox" class="btn-check place-manual-check place-group" name="place_styles" id="p2" value="วัด ทำบุญ สิ่งศักดิ์สิทธิ์">
+                                <label class="btn rounded-pill btn-sm style-label" for="p2">🙏 ไหว้พระ/สายบุญ</label>
+                                
+                                <input type="checkbox" class="btn-check place-manual-check place-group" name="place_styles" id="p3" value="ประวัติศาสตร์ เมืองเก่า พิพิธภัณฑ์">
+                                <label class="btn rounded-pill btn-sm style-label" for="p3">🏛️ เมืองเก่า/พิพิธภัณฑ์</label>
+                                
+                                <input type="checkbox" class="btn-check place-manual-check place-group" name="place_styles" id="p4" value="คาเฟ่ ถ่ายรูปสวยๆ">
+                                <label class="btn rounded-pill btn-sm style-label" for="p4">📸 คาเฟ่/จุดถ่ายรูป</label>
+                                
+                                <input type="checkbox" class="btn-check place-manual-check place-group" name="place_styles" id="p5" value="ตลาด ถนนคนเดิน ช้อปปิ้ง">
+                                <label class="btn rounded-pill btn-sm style-label" for="p5">🛍️ ตลาด/คนเดิน</label>
+
+                                <input type="checkbox" class="btn-check place-manual-check place-group" name="place_styles" id="p6" value="Adventure ลุยๆ กางเต็นท์">
+                                <label class="btn rounded-pill btn-sm style-label" for="p6">🏕️ Adventure/กางเต็นท์</label>
+
+                                <input type="checkbox" class="btn-check place-manual-check place-group" name="place_styles" id="p7" value="จุดชมวิว พระอาทิตย์ขึ้น พระอาทิตย์ตก">
+                                <label class="btn rounded-pill btn-sm style-label" for="p7">🌅 จุดชมวิว</label>
+
+                                <input type="checkbox" class="btn-check place-manual-check place-group" name="place_styles" id="p8" value="สวนดอกไม้ เชิงเกษตร">
+                                <label class="btn rounded-pill btn-sm style-label" for="p8">🌻 สวนดอกไม้/เกษตร</label>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-6">
+                        <div class="p-3 h-100 box-green shadow-sm" id="foodBox">
+                            <label class="form-label fw-bold text-success fs-5 mb-3"><i class="fas fa-utensils"></i> ประเภทร้านอาหาร <span class="text-danger">*</span></label>
+                            <div class="d-flex flex-wrap gap-2">
+                                <input type="checkbox" class="btn-check food-ai-check food-group" name="food_styles" id="f_ai" value="AI_Select" checked>
+                                <label class="btn rounded-pill btn-sm fw-bold style-label shadow-sm" for="f_ai">✨ ให้ AI เลือกร้านอร่อยให้</label>
+                                
+                                <input type="checkbox" class="btn-check food-manual-check food-group" name="food_styles" id="f1" value="ร้านอาหารท้องถิ่น อาหารพื้นเมือง">
+                                <label class="btn rounded-pill btn-sm style-label" for="f1">🍜 อาหารพื้นเมือง</label>
+                                
+                                <input type="checkbox" class="btn-check food-manual-check food-group" name="food_styles" id="f2" value="คาเฟ่ ร้านกาแฟ เบเกอรี่">
+                                <label class="btn rounded-pill btn-sm style-label" for="f2">☕ ร้านกาแฟ/ของหวาน</label>
+                                
+                                <input type="checkbox" class="btn-check food-manual-check food-group" name="food_styles" id="f3" value="Street Food ตลาดโต้รุ่ง">
+                                <label class="btn rounded-pill btn-sm style-label" for="f3">🍢 Street Food</label>
+                                
+                                <input type="checkbox" class="btn-check food-manual-check food-group" name="food_styles" id="f4" value="หมูกระทะ ชาบู ปิ้งย่าง">
+                                <label class="btn rounded-pill btn-sm style-label" for="f4">🥓 หมูกระทะ/ปิ้งย่าง</label>
+
+                                <input type="checkbox" class="btn-check food-manual-check food-group" name="food_styles" id="f5" value="อาหารทะเล ซีฟู้ด">
+                                <label class="btn rounded-pill btn-sm style-label" for="f5">🦐 ซีฟู้ด</label>
+
+                                <input type="checkbox" class="btn-check food-manual-check food-group" name="food_styles" id="f6" value="ร้านอาหารหรู ดินเนอร์ บรรยากาศดี">
+                                <label class="btn rounded-pill btn-sm style-label" for="f6">🥂 ดินเนอร์หรู</label>
+                                
+                                <input type="checkbox" class="btn-check food-manual-check food-group" name="food_styles" id="f7" value="อาหารไทย อาหารตามสั่ง">
+                                <label class="btn rounded-pill btn-sm style-label" for="f7">🍛 อาหารไทย</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="d-grid mt-4">
+                    <button type="submit" class="btn btn-success btn-lg rounded-pill shadow fw-bold py-3" style="font-size: 1.2rem;">
+                        <i class="fas fa-magic me-2"></i> สร้างแผนเดินทางอัจฉริยะ!
+                    </button>
+                </div>
+
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="mapModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-success text-white">
+                <h5 class="modal-title"><i class="fas fa-map-marked-alt"></i> จิ้มเลือกจุดบนแผนที่</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-0">
+                <div id="pickerMap"></div>
+            </div>
+            <div class="modal-footer justify-content-between">
+                <button type="button" class="btn btn-outline-primary" onclick="centerMapOnGPS()"><i class="fas fa-crosshairs"></i> วิ่งไปที่ตำแหน่งปัจจุบัน</button>
+                <button type="button" class="btn btn-success fw-bold px-4" onclick="confirmLocation()">ยืนยันจุดนี้</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+    const popularPlacesOptions = `
+        <option value="" disabled selected>-- เลือกที่เที่ยวยอดฮิต --</option>
+        <option value="ตัวเมืองกำแพงเพชร">ตัวเมืองกำแพงเพชร (ทั่วไป)</option>
+        <option value="อุทยานประวัติศาสตร์กำแพงเพชร">อุทยานประวัติศาสตร์กำแพงเพชร</option>
+        <option value="น้ำตกคลองลาน">อุทยานแห่งชาติน้ำตกคลองลาน</option>
+        <option value="ช่องเย็น อุทยานแห่งชาติแม่วงก์">ช่องเย็น (แม่วงก์)</option>
+        <option value="บ่อน้ำพุร้อนพระร่วง">บ่อน้ำพุร้อนพระร่วง</option>
+        <option value="ตลาดย้อนยุคนครชุม">ตลาดย้อนยุคนครชุม</option>
+    `;
+
+    function clearDropdown(targetId) {
+        let selId = "sel_" + targetId;
+        let sel = document.getElementById(selId);
+        if(sel) sel.value = ""; 
+    }
+
+    function generateDayInputs() {
+        const numDays = document.getElementById('num_days').value;
+        const container = document.getElementById('dailyRoutesContainer');
+        container.innerHTML = ''; 
+
+        for(let i = 1; i <= numDays; i++) {
+            let defaultStart = (i === 1) ? "" : `จุดสิ้นสุดของวันที่ ${i-1}`;
+            let defaultEnd = "";
+
+            let startDropdownOptions = popularPlacesOptions;
+            if (i > 1) {
+                startDropdownOptions = `<option value="จุดสิ้นสุดของเมื่อวาน" class="text-success fw-bold">🔄 เริ่มต้นจากจุดสิ้นสุดของเมื่อวาน</option>` + popularPlacesOptions;
+            }
+
+            // 🌟 ปรับโครงสร้างกล่องงบรายวันให้ใส่ min="1000" 🌟
+            let html = `
+                <div class="day-box shadow-sm">
+                    <h6 class="fw-bold text-dark"><i class="fas fa-route text-success"></i> วันที่ ${i} <span class="text-danger">*</span></h6>
+                    <div class="mb-2">
+                        <label class="form-label text-success fw-bold mb-1" style="font-size: 0.85rem;"><i class="fas fa-map-pin"></i> จำนวนสถานที่ที่อยากเที่ยววันนี้:</label>
+                        <select class="form-select form-select-sm custom-input d-inline-block" name="places_per_day[]" style="width: auto; min-width: 120px;">
+                            <option value="4">4 ที่</option>
+                            <option value="5">5 ที่</option>
+                            <option value="6" selected>6 ที่</option>
+                            <option value="7">7 ที่</option>
+                            <option value="8">8 ที่</option>
+                        </select>
+                    </div>
+                    <div class="row g-2">
+                        <div class="col-md-2">
+                            <label class="form-label text-muted" style="font-size: 0.85rem;"><i class="fas fa-clock"></i> เริ่ม:</label>
+                            <input type="time" class="form-control form-control-sm custom-input" name="daily_start_time[]" value="09:00" required>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label text-muted" style="font-size: 0.85rem;"><i class="fas fa-clock"></i> กลับ:</label>
+                            <input type="time" class="form-control form-control-sm custom-input" name="daily_end_time[]" value="18:00" required>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label text-success fw-bold" style="font-size: 0.85rem;"><i class="fas fa-wallet"></i> งบวันนี้(฿):</label>
+                            <input type="number" class="form-control form-control-sm custom-input day-budget-input" name="daily_budget[]" value="1500" min="500" required>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label text-muted" style="font-size: 0.85rem;">เริ่มทริปจาก: <span class="text-danger">*</span></label>
+                            <select id="sel_d_start_${i}" class="form-select form-select-sm mb-1 custom-input" onchange="document.getElementById('d_start_${i}').value = this.value;">
+                                ${startDropdownOptions}
+                            </select>
+                            <div class="input-group input-group-sm">
+                                <input type="text" class="form-control custom-input day-input-check" id="d_start_${i}" name="day_start[]" value="${defaultStart}" required placeholder="เลือกหรือจิ้มพิกัด">
+                                <button type="button" class="btn btn-outline-success border-success" onclick="getLocation('d_start_${i}')" title="ดึง GPS">🎯</button>
+                                <button type="button" class="btn btn-success" onclick="openMapPicker('d_start_${i}')" title="จิ้มแผนที่">📍</button>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label text-muted" style="font-size: 0.85rem;">สิ้นสุดที่: <span class="text-danger">*</span></label>
+                            <select id="sel_d_end_${i}" class="form-select form-select-sm mb-1 custom-input" onchange="document.getElementById('d_end_${i}').value = this.value;">
+                                ${popularPlacesOptions}
+                            </select>
+                            <div class="input-group input-group-sm">
+                                <input type="text" class="form-control custom-input day-input-check" id="d_end_${i}" name="day_end[]" value="${defaultEnd}" required placeholder="เลือกหรือจิ้มพิกัด">
+                                <button type="button" class="btn btn-outline-success border-success" onclick="getLocation('d_end_${i}')" title="ดึง GPS">🎯</button>
+                                <button type="button" class="btn btn-success" onclick="openMapPicker('d_end_${i}')" title="จิ้มแผนที่">📍</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            container.innerHTML += html;
+        }
+    }
+
+    document.addEventListener("DOMContentLoaded", function() {
+        generateDayInputs();
+
+        let placeAiCheck = document.getElementById('p_ai');
+        let placeManualChecks = document.querySelectorAll('.place-manual-check');
+        placeAiCheck.addEventListener('change', function() {
+            if(this.checked) placeManualChecks.forEach(cb => cb.checked = false);
+        });
+        placeManualChecks.forEach(cb => {
+            cb.addEventListener('change', function() { if(this.checked) placeAiCheck.checked = false; });
+        });
+
+        let foodAiCheck = document.getElementById('f_ai');
+        let foodManualChecks = document.querySelectorAll('.food-manual-check');
+        foodAiCheck.addEventListener('change', function() {
+            if(this.checked) foodManualChecks.forEach(cb => cb.checked = false);
+        });
+        foodManualChecks.forEach(cb => {
+            cb.addEventListener('change', function() { if(this.checked) foodAiCheck.checked = false; });
+        });
+    });
+
+    var consumptionRates = { "รถยนต์ทั่วไป (Sedan)": 15.0, "รถอีโคคาร์ (Eco Car)": 20.0, "รถอเนกประสงค์ (SUV/PPV)": 12.0, "รถกระบะ (Pickup)": 14.0, "รถตู้ (Van)": 10.0, "มอเตอร์ไซค์ (Motorcycle)": 45.0, "บิ๊กไบค์ (Big Bike)": 20.0, "รถยนต์ไฟฟ้า (EV)": 6.0 };
+    var fuelPrices = { "แก๊สโซฮอล์ 95": 37.50, "แก๊สโซฮอล์ 91": 37.20, "E20": 35.40, "E85": 32.90, "ดีเซล": 32.94, "ดีเซล พรีเมียม": 43.50, "ไฟฟ้า (EV)": 7.50 };
+
+    function updateConsumptionDefault() {
+        let vehicle = document.getElementById('vehicleSelect').value;
+        document.getElementById('consumptionInput').value = consumptionRates[vehicle] || 15.0;
+        document.getElementById('unitLabel').innerText = (vehicle === 'รถยนต์ไฟฟ้า (EV)') ? 'กม./kWh' : 'กม./ลิตร';
+    }
+
+    function updateFuelPrice() {
+        let type = document.getElementById("fuelTypeSelect").value;
+        document.getElementById("fuelPriceInput").value = (fuelPrices[type] || 37.50).toFixed(2);
+    }
+
+    // 🌟 แจ้งเตือนลูกค้าอย่างชัดเจนว่าติดขัดตรงไหน 🌟
+    function validateForm(event) {
+        // 1. เช็คว่า "งบรายวัน" ต่ำกว่า 1000 ไหม?
+        const dailyBudgets = document.querySelectorAll('.day-budget-input');
+        for (let i = 0; i < dailyBudgets.length; i++) {
+            if (parseInt(dailyBudgets[i].value) < 500 || dailyBudgets[i].value === "") {
+                alert("⚠️ กรุณาระบุ 'งบประมาณรายวัน' ไม่ต่ำกว่า 500 บาท/วัน ครับ เพื่อให้ AI จัดทริปได้อย่างสมบูรณ์");
+                dailyBudgets[i].focus();
+                event.preventDefault(); 
+                return false;
+            }
+        }
+
+        // 2. เช็คว่าปล่อยช่องพิกัดว่างหรือเปล่า?
+        const dailyInputs = document.querySelectorAll('.day-input-check');
+        for (let i = 0; i < dailyInputs.length; i++) {
+            if (dailyInputs[i].value.trim() === "") {
+                alert("⚠️ กรุณาระบุ 'จุดเริ่ม-สิ้นสุด' ของแต่ละวันให้ครบถ้วน ห้ามปล่อยว่างครับ!");
+                dailyInputs[i].value = ""; 
+                dailyInputs[i].focus();
+                event.preventDefault(); 
+                return false;
+            }
+        }
+
+        // 3. เช็คการติ๊ก Checkbox หมวดที่เที่ยว/ที่กิน
+        const placeChecked = document.querySelectorAll('.place-group:checked').length > 0;
+        if (!placeChecked) {
+            alert("⚠️ กรุณาเลือก 'ประเภทสถานที่เที่ยว' อย่างน้อย 1 อย่างครับ");
+            document.getElementById('placeBox').scrollIntoView({ behavior: 'smooth', block: 'center' });
+            event.preventDefault(); return false;
+        }
+
+        const foodChecked = document.querySelectorAll('.food-group:checked').length > 0;
+        if (!foodChecked) {
+            alert("⚠️ กรุณาเลือก 'ประเภทร้านอาหาร' อย่างน้อย 1 อย่างครับ");
+            document.getElementById('foodBox').scrollIntoView({ behavior: 'smooth', block: 'center' });
+            event.preventDefault(); return false;
+        }
+
+        // 4. ถ้ามี Input อื่นที่ required แต่ลืมกรอก เบราว์เซอร์จะเตะเบรกเอง
+        const form = document.getElementById('planForm');
+        if (!form.checkValidity()) {
+            event.preventDefault(); 
+            form.reportValidity(); 
+            return false;
+        }
+
+        // โชว์หน้าต่างโหลดดิ้ง
+        document.getElementById('loadingOverlay').style.display = 'flex'; 
+        let msg = document.getElementById('loadingMsg');
+        setTimeout(() => { msg.innerText = "กำลังค้นหาสถานที่ที่เหมาะกับคุณ..."; }, 2000);
+        setTimeout(() => { msg.innerText = "กำลังให้ AI จัดสรรคิวและคำนวณค่าน้ำมัน..."; }, 4000);
+        
+        return true; 
+    }
+    
+    function getLocation(targetId) { 
+        if (navigator.geolocation) { 
+            document.getElementById(targetId).value = "กำลังดึง GPS...";
+            navigator.geolocation.getCurrentPosition(
+                function(pos) {
+                    document.getElementById(targetId).value = pos.coords.latitude.toFixed(6) + ", " + pos.coords.longitude.toFixed(6);
+                    clearDropdown(targetId);
+                }, 
+                function(error) {
+                    let msg = "❌ ไม่สามารถดึงตำแหน่งพิกัดได้ครับ\n\n";
+                    if (navigator.userAgent.indexOf("LINE") > -1) {
+                        msg += "🚨 ดูเหมือนคุณกำลังเปิดเว็บผ่านแอป LINE ซึ่งบล็อกการใช้ GPS ครับ\n\n👉 แนะนำให้กดที่ 'เมนู (จุด 3 จุด)' มุมบนขวา แล้วเลือก 'เปิดด้วยเบราว์เซอร์เริ่มต้น' (Open in Browser) เช่น Safari หรือ Chrome แล้วลองใหม่ครับ";
+                    } else {
+                        msg += "กรุณากด 'อนุญาต' (Allow) การเข้าถึงตำแหน่ง (Location) ในเบราว์เซอร์ของคุณก่อนครับ";
+                    }
+                    alert(msg);
+                    document.getElementById(targetId).value = "";
+                },
+                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+            ); 
+        } else {
+            alert("อุปกรณ์ของคุณไม่รองรับ GPS ครับ");
+        }
+    }
+    
+    var map = null, marker = null, currentTargetInputId = null, selectedLat = null, selectedLon = null, mapModal = null;
+    
+    document.addEventListener("DOMContentLoaded", function() {
+        let modalElement = document.getElementById('mapModal');
+        if (modalElement) mapModal = new bootstrap.Modal(modalElement);
+    });
+    
+    function openMapPicker(targetId) { 
+        currentTargetInputId = targetId; 
+        if (mapModal) mapModal.show(); 
+        setTimeout(function() { 
+            if (map == null) { 
+                map = L.map('pickerMap').setView([16.4828, 99.5227], 13); 
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map); 
+                map.on('click', function(e) { 
+                    selectedLat = e.latlng.lat; selectedLon = e.latlng.lng; 
+                    if (marker != null) map.removeLayer(marker); 
+                    marker = L.marker([selectedLat, selectedLon]).addTo(map).bindPopup("พิกัด: " + selectedLat.toFixed(5) + ", " + selectedLon.toFixed(5)).openPopup(); 
+                }); 
+            } 
+            map.invalidateSize(); 
+        }, 500); 
+    }
+
+    function centerMapOnGPS() {
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                function(pos) {
+                    selectedLat = pos.coords.latitude;
+                    selectedLon = pos.coords.longitude;
+                    map.setView([selectedLat, selectedLon], 15);
+                    if (marker != null) map.removeLayer(marker);
+                    marker = L.marker([selectedLat, selectedLon]).addTo(map).bindPopup("พิกัดปัจจุบันของคุณ").openPopup();
+                }, 
+                function(error) {
+                    if (navigator.userAgent.indexOf("LINE") > -1) {
+                        alert("🚨 แอป LINE บล็อกการใช้ GPS ครับ\n\n👉 กรุณากดปุ่ม 'จุด 3 จุด' มุมบนขวา แล้วเลือก 'เปิดในเบราว์เซอร์เริ่มต้น' (Chrome/Safari) แทนครับ");
+                    } else {
+                        alert("❌ กรุณาอนุญาตการเข้าถึง GPS ก่อนครับ");
+                    }
+                },
+                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+            );
+        }
+    }
+    
+    function confirmLocation() { 
+        if (selectedLat != null && selectedLon != null) { 
+            document.getElementById(currentTargetInputId).value = selectedLat.toFixed(6) + ", " + selectedLon.toFixed(6); 
+            clearDropdown(currentTargetInputId);
+            if (mapModal) mapModal.hide(); 
+        } else alert("กรุณาจิ้มเลือกจุดบนแผนที่ก่อนครับ");
+    }
+</script>
+
+</body>
+</html>

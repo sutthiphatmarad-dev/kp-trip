@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <title>สรุปแผนเที่ยว - KP Smart Travel</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Sarabun', sans-serif; background-color: #f4fbf6; overflow-x: hidden; }
+        .hero-banner { background: #198754; color: white; padding: 30px 0; border-radius: 0 0 30px 30px; margin-bottom: 30px; box-shadow: 0 5px 15px rgba(25,135,84,0.3); }
+        .day-tab-container { display: flex; justify-content: center; flex-wrap: wrap; gap: 10px; margin-bottom: 15px; }
+        .day-btn { font-weight: bold; border-radius: 30px; padding: 8px 20px; transition: all 0.3s; }
+        
+        /* 🌟 บังคับแผนที่ให้โชว์ทุกหน้าจอ 🌟 */
+        #map { height: 50vh; min-height: 450px; width: 100%; border-radius: 15px; border: 3px solid #e2f0e6; box-shadow: 0 10px 20px rgba(0,0,0,0.05); display: block; position: relative; z-index: 1; }
+        
+        .table-container { background: white; border-radius: 15px; padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); margin-top: 20px; }
+        .btn-optimize { background: linear-gradient(45deg, #ffc107, #ff9800); color: white; border: none; font-weight: bold; transition: transform 0.2s; }
+        .btn-optimize:hover { transform: scale(1.05); color: white; }
+        .green-input { border: 2px solid #198754 !important; color: #198754 !important; background-color: #f4fbf6 !important; font-weight: bold; transition: all 0.3s ease; }
+        .green-input:focus, .green-input:active { background-color: #ffffff !important; color: #198754 !important; border-color: #146c43 !important; box-shadow: 0 0 10px rgba(25,135,84,0.3) !important; outline: none; }
+        .green-input::placeholder { color: #8ac0a0; font-weight: normal; }
+        .green-input option { background-color: white; color: #198754; }
+
+        /* 📱 🌟 ระบบตารางสำหรับ แท็บเล็ต & มือถือ (กันบัคเบียดกัน) 🌟 */
+        .table-responsive { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        #planTable th, #planTable td { vertical-align: middle; }
+        /* ล็อกไม่ให้ข้อความในตารางบีบตัว ยกเว้นช่องชื่อสถานที่ */
+        #planTable td:nth-child(1), #planTable th:nth-child(1) { min-width: 90px; white-space: nowrap; } /* ช่องเวลา */
+        #planTable td:nth-child(3) { min-width: 200px; white-space: normal; } /* ช่องชื่อสถานที่ (ให้ตัดบรรทัดได้) */
+        #planTable td:nth-child(4), #planTable th:nth-child(4),
+        #planTable td:nth-child(5), #planTable th:nth-child(5) { min-width: 100px; white-space: nowrap; } /* ช่องราคา */
+        #planTable td:nth-child(6), #planTable th:nth-child(6) { min-width: 130px; white-space: nowrap; } /* ช่องงบรายวันคงเหลือ */
+        #planTable td:nth-child(7), #planTable th:nth-child(7) { min-width: 150px; white-space: nowrap; } /* ช่องปุ่มจัดการคิว */
+    </style>
+</head>
+<body>
+
+<div class="hero-banner text-center">
+    <h2 class="fw-bold mb-0"><i class="fas fa-map-marked-alt text-warning"></i> แผนการเดินทางอัจฉริยะของคุณ</h2>
+    <p class="mt-2 mb-0">งบประมาณรวมทั้งทริป: <span class="fw-bold text-warning fs-5">{{ total_budget }}</span> บาท</p>
+</div>
+
+<div class="container-fluid px-4 pb-5"> <div class="row">
+        <div class="col-12 mb-2">
+            <div id="dayTabs" class="day-tab-container"></div>
+        </div>
+
+        <div class="col-12 mb-4">
+            <div id="map"></div>
+            <div class="text-center mt-4">
+                <button id="optimizeBtn" class="btn btn-optimize btn-lg rounded-pill px-5 shadow" onclick="optimizeCurrentView()">
+                    <i class="fas fa-magic me-2"></i> จัดเรียงเส้นทางอัจฉริยะ (คลิกเพื่อคำนวณใหม่)
+                </button>
+            </div>
+        </div>
+
+        <div class="col-12">
+            <div class="table-container">
+                <div class="table-responsive pb-2">
+                    <table class="table table-hover align-middle" id="planTable">
+                        <thead class="table-success text-center">
+                            <tr>
+                                <th>เวลา</th>
+                                <th>ไอคอน</th>
+                                <th>สถานที่</th>
+                                <th>ราคา (฿)</th>
+                                <th>ค่าน้ำมัน (฿)</th>
+                                <th>งบรายวันคงเหลือ</th>
+                                <th>จัดการคิว</th>
+                            </tr>
+                        </thead>
+                        <tbody id="planBody">
+                            {{ plan_data|safe }}
+                        </tbody>
+                    </table>
+                </div>
+                <div class="text-center mt-3">
+                    <button class="btn btn-outline-success border-dashed rounded-pill px-4 fw-bold" onclick="addManualRow()">
+                        <i class="fas fa-plus-circle me-1"></i> + เพิ่มจุดแวะพักด้วยตัวเอง
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<button id="chatToggleBtn" class="btn btn-success rounded-circle shadow-lg" style="position: fixed; bottom: 30px; right: 30px; width: 65px; height: 65px; z-index: 1000; transition: transform 0.2s;">
+    <i class="fas fa-comments" style="font-size: 28px;"></i>
+</button>
+
+<div id="chatBox" class="card shadow-lg" style="display: none; position: fixed; bottom: 110px; right: 30px; width: 350px; height: 450px; max-width: 90vw; z-index: 1000; border-radius: 15px; border: 2px solid #198754;">
+    <div class="card-header bg-success text-white d-flex justify-content-between align-items-center" style="border-radius: 12px 12px 0 0;">
+        <h6 class="mb-0 fw-bold"><i class="fas fa-robot me-2"></i> น้องไกด์ AI พร้อมช่วยคุณ!</h6>
+        <button id="closeChatBtn" class="btn btn-sm btn-success shadow-none"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="card-body" id="chatHistory" style="overflow-y: auto; background-color: #f4fbf6; display: flex; flex-direction: column; gap: 10px;">
+        <div class="d-flex justify-content-start">
+            <div class="bg-white text-dark p-2 rounded-3 shadow-sm border" style="max-width: 80%; font-size: 0.9rem;">
+                สวัสดีครับ! ทริปกำแพงเพชรนี้ให้น้องไกด์ช่วยแนะนำอะไร พิมพ์ถามมาได้เลย! 😊
+            </div>
+        </div>
+    </div>
+    <div class="card-footer bg-white" style="border-radius: 0 0 15px 15px; padding: 10px;">
+        <div class="input-group">
+            <input type="text" id="chatInput" class="form-control form-control-sm green-input" placeholder="พิมพ์ถามตรงนี้..." onkeypress="handleChatEnter(event)">
+            <button class="btn btn-success btn-sm" id="sendChatBtn" onclick="sendMessage()"><i class="fas fa-paper-plane"></i></button>
+        </div>
+    </div>
+</div>
+
+<script async src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&libraries=places&loading=async&callback=initMap"></script>
+
+<script>
+    let map;
+    let directionsService;
+    let directionsRenderer;
+    let customMarkers = [];
+    
+    const dailyBudgetsStr = "{{ daily_budgets | join(',') }}";
+    const dailyBudgets = dailyBudgetsStr.split(',');
+    const fuelConsumption = parseFloat("{{ fuel_consumption }}") || 15;
+    const fuelPrice = parseFloat("{{ fuel_price }}") || 38;
+    let currentDayFilter = 'all'; 
+
+    function recalcBudget() {
+        const dayRows = {};
+        document.querySelectorAll('#planBody tr.trip-row').forEach(row => {
+            const match = row.className.match(/day-(\d+)/);
+            if(match) {
+                let d = parseInt(match[1]);
+                if(!dayRows[d]) dayRows[d] = [];
+                dayRows[d].push(row);
+            }
+        });
+
+        for(let d in dayRows) {
+            let dailyTotal = parseFloat(dailyBudgets[d-1]) || parseFloat(dailyBudgets[0]) || 1500;
+            let currentBudget = dailyTotal;
+            
+            const dividerLabel = document.querySelector(`.day-divider[data-day="${d}"] .daily-budget-label`);
+            if(dividerLabel) {
+                dividerLabel.innerHTML = `<span class="badge bg-warning text-dark ms-2 shadow-sm">งบตั้งต้น: ${dailyTotal} ฿</span>`;
+            }
+
+            dayRows[d].forEach(row => {
+                const activityCost = parseFloat(row.querySelector('.price-activity')?.value) || 0;
+                const fuelCost = parseFloat(row.querySelector('.price-fuel')?.value) || 0;
+                currentBudget -= (activityCost + fuelCost);
+                const remainingCell = row.querySelector('.remaining-budget');
+                if (remainingCell) {
+                    remainingCell.innerText = currentBudget + " ฿";
+                    if (currentBudget < 0) remainingCell.classList.replace('text-success', 'text-danger');
+                    else remainingCell.classList.replace('text-danger', 'text-success');
+                }
+            });
+        }
+    }
+
+    function initMap() {
+        map = new google.maps.Map(document.getElementById('map'), {
+            zoom: 11, center: {lat: 16.4828, lng: 99.5227},
+            mapTypeControl: true, streetViewControl: true,
+            scrollwheel: true, gestureHandling: 'greedy',
+            zoomControl: true, disableDefaultUI: false,
+            minZoom: 5, maxZoom: 20
+        });
+        directionsService = new google.maps.DirectionsService();
+        directionsRenderer = new google.maps.DirectionsRenderer({
+            map: map, suppressMarkers: true, polylineOptions: { strokeColor: "#198754", strokeWeight: 6, strokeOpacity: 0.8 } 
+        });
+        
+        renderDayButtons(); 
+        
+        const days = new Set();
+        document.querySelectorAll('.trip-row').forEach(row => {
+            const match = row.className.match(/day-(\d+)/);
+            if (match) days.add(parseInt(match[1]));
+        });
+        
+        if (days.size <= 1) {
+            calculateAndDisplayRoute(true); 
+        } else {
+            calculateAndDisplayRoute(false);
+        }
+
+        setupMapClickListener();
+        recalcBudget();
+    }
+
+    function renderDayButtons() {
+        const days = new Set();
+        document.querySelectorAll('.trip-row').forEach(row => {
+            const match = row.className.match(/day-(\d+)/);
+            if (match) days.add(parseInt(match[1]));
+        });
+
+        const container = document.getElementById('dayTabs');
+        if (days.size <= 1) { container.style.display = 'none'; return; }
+
+        let html = `<button class="btn btn-success day-btn shadow-sm" onclick="switchDay('all', this)"><i class="fas fa-globe"></i> ทริปทั้งหมด</button>`;
+        let sortedDays = Array.from(days).sort((a,b) => a-b);
+        sortedDays.forEach(d => {
+            html += `<button class="btn btn-outline-success day-btn bg-white shadow-sm" onclick="switchDay('${d}', this)"><i class="fas fa-map-pin"></i> วันที่ ${d}</button>`;
+        });
+        container.innerHTML = html;
+    }
+
+    function switchDay(day, btnElem) {
+        currentDayFilter = day;
+        document.querySelectorAll('.day-btn').forEach(btn => {
+            btn.classList.remove('btn-success'); btn.classList.add('btn-outline-success', 'bg-white');
+        });
+        btnElem.classList.remove('btn-outline-success', 'bg-white'); btnElem.classList.add('btn-success');
+
+        document.querySelectorAll('.trip-row, .day-divider').forEach(el => {
+            if (day === 'all') el.style.display = ''; 
+            else {
+                if (el.classList.contains('day-' + day) || el.getAttribute('data-day') === day) el.style.display = ''; 
+                else el.style.display = 'none'; 
+            }
+        });
+
+        const optBtn = document.getElementById('optimizeBtn');
+        if (day === 'all') {
+            optBtn.innerHTML = '<i class="fas fa-magic me-2"></i> จัดเรียงเส้นทางอัจฉริยะ (คลิกเพื่อแก้เส้นมั่ว)';
+            optBtn.classList.add('btn-optimize');
+            optBtn.classList.remove('btn-success');
+            calculateAndDisplayRoute(false); 
+        } else {
+            optBtn.innerHTML = `<i class="fas fa-check-circle me-2"></i> จัดเรียงเส้นทางอัจฉริยะ (เฉพาะวันที่ ${day})`;
+            optBtn.classList.remove('btn-optimize');
+            optBtn.classList.add('btn-success'); 
+            calculateAndDisplayRoute(true); 
+        }
+    }
+
+    function clearCustomMarkers() { customMarkers.forEach(m => m.setMap(null)); customMarkers = []; }
+
+    function calculateAndDisplayRoute(isOptimized) {
+        clearCustomMarkers();
+        let allRows = Array.from(document.querySelectorAll('.trip-row'));
+        if (currentDayFilter !== 'all') allRows = allRows.filter(row => row.classList.contains('day-' + currentDayFilter));
+
+        if (allRows.length < 2) {
+            directionsRenderer.setDirections({routes: []});
+            if (window.fallbackPolyline) window.fallbackPolyline.setMap(null);
+            return;
+        }
+
+        const waypoints = [];
+        const pathCoordinates = []; 
+        let validRows = [];
+
+        allRows.forEach((row) => {
+            let rawLat = row.getAttribute('data-lat') || '';
+            let rawLng = row.getAttribute('data-lng') || '';
+            let lat = parseFloat(rawLat.replace(/[^\d.-]/g, ''));
+            let lng = parseFloat(rawLng.replace(/[^\d.-]/g, ''));
+            let name = row.getAttribute('data-name');
+            
+            if (isNaN(lat) || isNaN(lng)) return; 
+            validRows.push(row);
+            let loc = new google.maps.LatLng(lat, lng);
+            pathCoordinates.push(loc); 
+
+            let iconImg = row.querySelector('.place-icon');
+            let iconUrl = iconImg ? iconImg.src : "https://img.icons8.com/color/48/map-pin.png";
+
+            let marker = new google.maps.Marker({
+                position: loc, map: map, title: name,
+                icon: { url: iconUrl, scaledSize: new google.maps.Size(40, 40) }, animation: google.maps.Animation.DROP
+            });
+
+            let infoWindow = new google.maps.InfoWindow({ content: `<div class="fw-bold p-2 text-success">${name}</div>` });
+            marker.addListener('click', () => { infoWindow.open(map, marker); });
+            customMarkers.push(marker);
+        });
+
+        if (validRows.length < 2) return;
+
+        const startLat = parseFloat(validRows[0].getAttribute('data-lat').replace(/[^\d.-]/g, ''));
+        const startLng = parseFloat(validRows[0].getAttribute('data-lng').replace(/[^\d.-]/g, ''));
+        const endLat = parseFloat(validRows[validRows.length - 1].getAttribute('data-lat').replace(/[^\d.-]/g, ''));
+        const endLng = parseFloat(validRows[validRows.length - 1].getAttribute('data-lng').replace(/[^\d.-]/g, ''));
+
+        for (let i = 1; i < validRows.length - 1; i++) {
+            let lat = parseFloat(validRows[i].getAttribute('data-lat').replace(/[^\d.-]/g, ''));
+            let lng = parseFloat(validRows[i].getAttribute('data-lng').replace(/[^\d.-]/g, ''));
+            waypoints.push({ location: new google.maps.LatLng(lat, lng), stopover: true });
+        }
+
+        const request = {
+            origin: new google.maps.LatLng(startLat, startLng), 
+            destination: new google.maps.LatLng(endLat, endLng),
+            waypoints: waypoints.slice(0, 8), 
+            optimizeWaypoints: isOptimized, 
+            travelMode: google.maps.TravelMode.DRIVING,
+        };
+
+        const lineSymbol = { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 3 };
+        if (window.fallbackPolyline) window.fallbackPolyline.setMap(null);
+        window.fallbackPolyline = new google.maps.Polyline({
+            path: pathCoordinates,
+            strokeOpacity: 0,
+            icons: [{ icon: lineSymbol, offset: '0', repeat: '20px' }],
+            strokeColor: '#FF9800',
+            strokeWeight: 4
+        });
+
+        directionsService.route(request, function(response, status) {
+            if (status === 'OK') {
+                directionsRenderer.setDirections(response);
+                if (window.fallbackPolyline) window.fallbackPolyline.setMap(null); 
+                
+                if (isOptimized) {
+                    reorderTableForDay(response.routes[0].waypoint_order, validRows);
+                    let optBtn = document.getElementById('optimizeBtn');
+                    optBtn.innerHTML = '<i class="fas fa-check-circle me-2"></i> จัดเรียงเส้นทางสำเร็จ!';
+                    setTimeout(() => calculateAndDisplayRoute(false), 500); 
+                } else {
+                    applyFuelCosts(response.routes[0].legs, validRows);
+                }
+            } else {
+                console.error("Directions API ล่มจ้า สาเหตุ: " + status);
+                directionsRenderer.setDirections({routes: []}); 
+                window.fallbackPolyline.setMap(map);
+            }
+        });
+        recalcBudget();
+    }
+
+    // ข้อ 6: คำนวณค่าน้ำมันจากระยะทางจริง (กม.) / อัตราสิ้นเปลือง x ราคาน้ำมัน
+    function applyFuelCosts(legs, rows) {
+        if (!rows || rows.length === 0 || !legs) return;
+        const firstFuel = rows[0].querySelector('.price-fuel');
+        if (firstFuel) firstFuel.value = 0;  // จุดเริ่ม ยังไม่ได้ขับ = 0
+        for (let i = 0; i < legs.length && (i + 1) < rows.length; i++) {
+            const distKm = (legs[i].distance ? legs[i].distance.value : 0) / 1000;
+            const liters = fuelConsumption > 0 ? (distKm / fuelConsumption) : 0;
+            const cost = Math.round(liters * fuelPrice);
+            const fuelInput = rows[i + 1].querySelector('.price-fuel');
+            if (fuelInput) fuelInput.value = cost;
+        }
+        recalcBudget();
+    }
+
+    function optimizeCurrentView() {
+        let optBtn = document.getElementById('optimizeBtn');
+        optBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i> กำลังคำนวณเส้นทาง...';
+        calculateAndDisplayRoute(true);
+    }
+
+    function reorderTableForDay(order, targetRows) {
+        const tbody = document.getElementById('planBody');
+        const waypointRows = targetRows.slice(1, -1); 
+        const lastRow = targetRows[targetRows.length - 1]; 
+        const optimizedWaypointRows = order.map(index => waypointRows[index]);
+        optimizedWaypointRows.forEach(row => { tbody.insertBefore(row, lastRow); });
+    }
+
+    function moveRow(btn, direction) {
+        const row = btn.closest('tr'); const tbody = document.getElementById('planBody');
+        const rows = Array.from(tbody.querySelectorAll('tr')); const index = rows.indexOf(row);
+        if (direction === -1 && index > 1) {
+            if (!rows[index - 1].classList.contains('day-divider')) { tbody.insertBefore(row, rows[index - 1]); calculateAndDisplayRoute(false); }
+        } else if (direction === 1 && index < rows.length - 1) {
+            if (!rows[index + 1].classList.contains('day-divider')) { tbody.insertBefore(row, rows[index + 2]); calculateAndDisplayRoute(false); }
+        }
+    }
+
+    function delRow(btn) {
+        if(confirm("ต้องการลบสถานที่นี้ออกจากทริปใช่ไหม?")) { btn.closest('tr').remove(); calculateAndDisplayRoute(false); }
+    }
+
+    function applyPopularPlace(selectElem) {
+        const row = selectElem.closest('tr');
+        const nameInput = row.querySelector('.custom-name-input');
+        const coordInput = row.querySelector('.custom-coord-input');
+        
+        if(selectElem.value === 'custom') {
+            nameInput.value = ''; coordInput.value = ''; nameInput.focus();
+        } else {
+            const data = selectElem.value.split('|');
+            if(data.length === 2) {
+                coordInput.value = data[0]; nameInput.value = data[1];
+                updateRowData(nameInput, 'name'); updateRowData(coordInput, 'coords');
+            }
+        }
+    }
+
+    function addManualRow() {
+        const tbody = document.getElementById('planBody');
+        const newRow = document.createElement('tr');
+        
+        let dayClass = 'day-1';
+        if (currentDayFilter !== 'all') dayClass = 'day-' + currentDayFilter;
+        else {
+            const rows = Array.from(document.querySelectorAll('.trip-row'));
+            if (rows.length > 0) {
+                const match = rows[rows.length-1].className.match(/day-(\d+)/);
+                if (match) dayClass = 'day-' + match[1];
+            }
+        }
+
+        newRow.className = "trip-row " + dayClass;
+        newRow.setAttribute('data-lat', '16.4828'); newRow.setAttribute('data-lng', '99.5227'); newRow.setAttribute('data-name', 'จุดแวะพักใหม่');
+        
+        newRow.innerHTML = `
+            <td class="text-center align-middle">
+                <input type="time" class="form-control form-control-sm green-input text-center" value="12:00">
+            </td>
+            <td class="text-center align-middle">
+                <select class="form-select form-select-sm mb-1 green-input" onchange="updateRowIcon(this)">
+                    <option value="https://img.icons8.com/color/96/map-pin.png">📍 หมุด</option>
+                    <option value="https://img.icons8.com/color/96/restaurant.png">🍜 อาหาร</option>
+                    <option value="https://img.icons8.com/color/96/cafe.png">☕ คาเฟ่</option>
+                    <option value="https://img.icons8.com/color/96/national-park.png">🏞️ เที่ยว</option>
+                    <option value="https://img.icons8.com/color/96/pagoda.png">⛩️ วัด</option>
+                    <option value="https://img.icons8.com/color/96/bed.png">🏨 ที่พัก</option>
+                </select>
+                <img src="https://img.icons8.com/color/96/map-pin.png" class="place-icon bg-white shadow-sm rounded-circle mt-1" style="width:40px;height:40px;">
+            </td>
+            <td class="align-middle">
+                <select class="form-select form-select-sm mb-1 green-input" onchange="applyPopularPlace(this)">
+                    <option value="" disabled selected>-- จิ้มเลือกสถานที่ยอดฮิต --</option>
+                    <option value="16.4828,99.5227|ตัวเมืองกำแพงเพชร">🏙️ ตัวเมืองกำแพงเพชร</option>
+                    <option value="16.4928,99.5153|อุทยานประวัติศาสตร์กำแพงเพชร">🏛️ อุทยานประวัติศาสตร์</option>
+                    <option value="16.1303,99.2811|น้ำตกคลองลาน">🌊 น้ำตกคลองลาน</option>
+                    <option value="16.0991,99.1068|ช่องเย็น อุทยานแห่งชาติแม่วงก์">🏕️ ช่องเย็น (แม่วงก์)</option>
+                    <option value="16.3216,99.6648|บ่อน้ำพุร้อนพระร่วง">♨️ บ่อน้ำพุร้อนพระร่วง</option>
+                    <option value="16.4851,99.5103|ตลาดย้อนยุคนครชุม">🛍️ ตลาดย้อนยุคนครชุม</option>
+                    <option value="custom">✍️ พิมพ์ชื่อเอง / จิ้มแผนที่</option>
+                </select>
+                <div class="input-group input-group-sm mb-1">
+                    <input type="text" class="form-control green-input custom-name-input" placeholder="ชื่อสถานที่..." onchange="updateRowData(this, 'name')">
+                </div>
+                <div class="input-group input-group-sm">
+                    <input type="text" class="form-control green-input custom-coord-input" placeholder="Lat,Lng" onchange="updateRowData(this, 'coords')">
+                    <button class="btn btn-success fw-bold" type="button" onclick="enableMapPick(this)" title="จิ้มพิกัดแผนที่">📍 จิ้ม</button>
+                </div>
+            </td>
+            <td class="align-middle"><input type="number" class="form-control form-control-sm green-input price-activity" value="100" onchange="recalcBudget()"></td>
+            <td class="align-middle"><input type="number" class="form-control form-control-sm green-input price-fuel" value="50" onchange="recalcBudget()"></td>
+            <td class="text-end fw-bold text-success align-middle remaining-budget">...</td>
+            <td class="text-center align-middle">
+                <div class="btn-group flex-wrap">
+                    <button type="button" onclick="moveRow(this, -1)" class="btn btn-outline-success btn-sm"><i class="fas fa-arrow-up"></i></button>
+                    <button type="button" onclick="moveRow(this, 1)" class="btn btn-outline-success btn-sm"><i class="fas fa-arrow-down"></i></button>
+                    <button type="button" onclick="delRow(this)" class="btn btn-danger btn-sm"><i class="fas fa-trash"></i></button>
+                </div>
+            </td>
+        `;
+
+        if (currentDayFilter !== 'all') {
+            const dayRows = Array.from(document.querySelectorAll('.trip-row.' + dayClass));
+            if (dayRows.length > 0) {
+                const lastDayRow = dayRows[dayRows.length - 1];
+                tbody.insertBefore(newRow, lastDayRow.nextSibling); 
+            } else tbody.appendChild(newRow);
+        } else tbody.appendChild(newRow);
+        
+        calculateAndDisplayRoute(false);
+    }
+
+    function updateRowIcon(selectElem) {
+        const row = selectElem.closest('tr');
+        const img = row.querySelector('.place-icon');
+        if(img) img.src = selectElem.value;
+        calculateAndDisplayRoute(false);
+    }
+
+    function updateRowData(inputElem, type) {
+        const row = inputElem.closest('tr');
+        if(type === 'name') row.setAttribute('data-name', inputElem.value || 'จุดแวะพักใหม่');
+        else if (type === 'coords') {
+            const coords = inputElem.value.split(',');
+            if(coords.length >= 2) { row.setAttribute('data-lat', coords[0].trim()); row.setAttribute('data-lng', coords[1].trim()); }
+        }
+        calculateAndDisplayRoute(false);
+    }
+
+    let pickingInput = null;
+
+    function enableMapPick(btn) {
+        pickingInput = btn.previousElementSibling;
+        pickingInput.classList.add('bg-warning');
+        pickingInput.value = "คลิกบนแผนที่เลย...";
+        map.setOptions({ draggableCursor: 'crosshair' });
+        alert("👆 นำเมาส์ไปคลิกตำแหน่งที่ต้องการบนแผนที่ด้านบนได้เลยครับ!");
+    }
+
+    function setupMapClickListener() {
+        map.addListener('click', function(e) {
+            if (pickingInput) {
+                const lat = e.latLng.lat().toFixed(5);
+                const lng = e.latLng.lng().toFixed(5);
+                pickingInput.value = `${lat}, ${lng}`;
+                pickingInput.classList.remove('bg-warning');
+                updateRowData(pickingInput, 'coords'); 
+                
+                let td = pickingInput.closest('td');
+                if (td) {
+                    let sel = td.querySelector('select.green-input');
+                    if (sel) sel.value = 'custom';
+                }
+
+                pickingInput = null;
+                map.setOptions({ draggableCursor: '' });
+            }
+        });
+    }
+
+    // ===== ข้อ 8: ระบบแชทน้องไกด์ AI =====
+    function toggleChat() {
+        const box = document.getElementById('chatBox');
+        const opened = (box.style.display !== 'none' && box.style.display !== '');
+        box.style.display = opened ? 'none' : 'flex';
+    }
+
+    function handleChatEnter(event) {
+        if (event.key === 'Enter') { event.preventDefault(); sendMessage(); }
+    }
+
+    function appendChat(text, who) {
+        const history = document.getElementById('chatHistory');
+        const wrap = document.createElement('div');
+        wrap.className = 'd-flex ' + (who === 'user' ? 'justify-content-end' : 'justify-content-start');
+        const bubble = document.createElement('div');
+        bubble.className = (who === 'user' ? 'bg-success text-white' : 'bg-white text-dark border') + ' p-2 rounded-3 shadow-sm';
+        bubble.style.maxWidth = '80%';
+        bubble.style.fontSize = '0.9rem';
+        bubble.innerText = text;
+        wrap.appendChild(bubble);
+        history.appendChild(wrap);
+        history.scrollTop = history.scrollHeight;
+        return bubble;
+    }
+
+    async function sendMessage() {
+        const input = document.getElementById('chatInput');
+        const msg = input.value.trim();
+        if (!msg) return;
+        appendChat(msg, 'user');
+        input.value = '';
+        const thinking = appendChat('กำลังคิด...', 'bot');
+        try {
+            const res = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: msg })
+            });
+            const data = await res.json();
+            thinking.innerText = data.response || 'ขออภัยครับ ตอบไม่ได้ตอนนี้ ลองใหม่อีกครั้งนะครับ';
+        } catch (e) {
+            thinking.innerText = 'เชื่อมต่อไม่ได้ ลองใหม่อีกครั้งนะครับ 🙏';
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        const toggleBtn = document.getElementById('chatToggleBtn');
+        const closeBtn = document.getElementById('closeChatBtn');
+        if (toggleBtn) toggleBtn.addEventListener('click', toggleChat);
+        if (closeBtn) closeBtn.addEventListener('click', toggleChat);
+    });
+
+    // ให้ Google Maps เรียก initMap ได้ผ่าน callback (แก้ปัญหาแผนที่ค้าง/ซูมไม่ได้)
+    window.initMap = initMap;
+</script>
+</body>
+</html>
