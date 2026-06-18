@@ -529,6 +529,7 @@ def plan_trip():
             daily_budgets=daily_budgets,
             fuel_consumption=fuel_consumption,
             fuel_price=fuel_price,
+            google_maps_api_key=GOOGLE_MAPS_API_KEY,
         )
 
     except Exception as e:
