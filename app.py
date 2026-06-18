@@ -306,6 +306,9 @@ def plan_trip():
         place_styles = request.form.getlist('place_styles')
         food_styles = request.form.getlist('food_styles')
 
+        places_per_day = request.form.getlist('places_per_day[]')
+        hotel_budget = max(500, safe_int(request.form.get('hotel_budget', '800'), default=800))
+
         str_places = "ยอดฮิต" if ("AI_Select" in place_styles or not place_styles) else " ".join(place_styles)
         str_foods = "อร่อย โลคอล" if ("AI_Select" in food_styles or not food_styles) else " ".join(food_styles)
 
@@ -334,18 +337,20 @@ def plan_trip():
             s_loc = day_starts[i] if i < len(day_starts) else "ตัวเมืองกำแพงเพชร"
             e_loc = day_ends[i] if i < len(day_ends) else "ตัวเมืองกำแพงเพชร"
 
+            ppd = max(3, min(safe_int(places_per_day[i], 6), 10)) if i < len(places_per_day) else 6
+
             s_name, s_coords = parse_location(s_loc)
             e_name, e_coords = parse_location(e_loc)
 
             if "จุดสิ้นสุดของเมื่อวาน" in s_loc or "จุดสิ้นสุดของวันที่" in s_loc:
                 daily_routing_instructions += (
                     f"[DAY_{i+1}] เริ่ม: 'จุดสิ้นสุดของเมื่อวาน', "
-                    f"จบ: '{e_name}' (พิกัด: {e_coords})\n"
+                    f"จบ: '{e_name}' (พิกัด: {e_coords}) | ต้องการ {ppd} สถานที่\n"
                 )
             else:
                 daily_routing_instructions += (
                     f"[DAY_{i+1}] เริ่ม: '{s_name}' (พิกัด: {s_coords}), "
-                    f"จบ: '{e_name}' (พิกัด: {e_coords})\n"
+                    f"จบ: '{e_name}' (พิกัด: {e_coords}) | ต้องการ {ppd} สถานที่\n"
                 )
 
         prompt = f"""
@@ -375,7 +380,7 @@ def plan_trip():
         [⚠️ คำสั่งบังคับเด็ดขาด (ห้ามฝ่าฝืน)]
         1. เลือกสถานที่จาก [ฐานข้อมูล] ด้านบนเท่านั้น!
         2. 🛑 ผสมผสานสถานที่: ห้ามเลือกแต่สถานที่ซ้ำๆ หรือที่ดังๆ เพียงอย่างเดียว! ให้เลือก "สถานที่แปลกใหม่ (Unseen)" หรือ "ร้านอาหาร Local ลับๆ" จากในฐานข้อมูลมาผสมในทริปด้วย
-        3. โครงสร้างตาราง: 1 วันต้องมี 6-8 คิว (เริ่ม -> เที่ยว -> กิน -> ธรรมชาตินอกเมือง -> เที่ยวลับ/คาเฟ่ -> จบ)
+        3. โครงสร้างตาราง: จัดจำนวนสถานที่ในแต่ละวัน "ตามจำนวนที่ระบุ" ใน [จุดบังคับรายวัน] (ดูค่า 'ต้องการ N สถานที่' ของแต่ละวัน) โดยนับเฉพาะจุดเที่ยว/กิน/พัก ไม่รวมจุดเริ่ม-จบ และเรียงลำดับ (เริ่ม -> เที่ยว -> กิน -> ธรรมชาตินอกเมือง -> เที่ยวลับ/คาเฟ่ -> จบ)
         4. ระยะเวลาขับรถ: กะระยะเวลาขับรถจริง (เช่น 20 นาที, 60 นาที) ห้ามใส่ 0 นาทีรวด
         5. รูปแบบ: DAY_X | เวลา | ระยะเวลาขับรถ | รหัสไอคอน | ชื่อสถานที่ | ประเภท | พิกัดLat | พิกัดLng
         """
@@ -474,15 +479,19 @@ def plan_trip():
                     lat_str, lng_str = DEFAULT_LAT, DEFAULT_LNG
 
             if "HOTEL" in extracted_icon or "พัก" in line:
-                default_price, fuel_est = "0", "0"
+                default_price, fuel_est = str(hotel_budget), "0"
             elif extracted_icon in ['ICON_TEMPLE', 'ICON_HISTORY']:
-                default_price, fuel_est = "20", "20"
+                default_price, fuel_est = "100", "30"
             elif extracted_icon == 'ICON_NATURE':
-                default_price, fuel_est = "40", "40"
+                default_price, fuel_est = "100", "60"
             elif extracted_icon == 'ICON_FOOD':
-                default_price, fuel_est = "120", "10"
+                default_price, fuel_est = "150", "20"
+            elif extracted_icon == 'ICON_CAFE':
+                default_price, fuel_est = "120", "20"
+            elif extracted_icon == 'ICON_MARKET':
+                default_price, fuel_est = "200", "20"
             else:
-                default_price, fuel_est = "50", "20"
+                default_price, fuel_est = "100", "30"
 
             is_start_or_end = ("เริ่มต้น" in name_str or "สิ้นสุด" in name_str
                                or "เดินทาง" in name_str or "จุดเริ่ม" in name_str)
