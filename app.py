@@ -25,7 +25,7 @@ logger = logging.getLogger("kp-travel")
 # ==========================================
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyAuI1Bwe2q1n9Op07LGaJ1S__gV2xGXJTs")
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "AIzaSyBAH1v4IWIelgzE6iprX7lzVL6-SCtf6hk")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-.5-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
 GEMINI_API_URL = (
     f"https://generativelanguage.googleapis.com/v1beta/models/"
     f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
