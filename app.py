@@ -2,8 +2,12 @@ import os
 import re
 import html
 import time
+import hmac
+import base64
 import random
+import hashlib
 import logging
+import threading
 import concurrent.futures
 
 import requests
@@ -26,6 +30,12 @@ GEMINI_API_URL = (
     f"https://generativelanguage.googleapis.com/v1beta/models/"
     f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
 )
+
+# 🟢 LINE Messaging API (ตั้งค่าใน Render env: LINE_CHANNEL_ACCESS_TOKEN / LINE_CHANNEL_SECRET)
+LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
+LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
+LINE_REPLY_URL = "https://api.line.me/v2/bot/message/reply"
+LINE_HISTORY = {}  # เก็บประวัติแชทต่อ user (ในหน่วยความจำ)
 
 # พิกัดกลางเมืองกำแพงเพชร ใช้เป็นค่า default ปลอดภัย
 DEFAULT_LAT = "16.4828"
@@ -346,18 +356,20 @@ def plan_trip():
             e_loc = day_ends[i] if i < len(day_ends) else "ตัวเมืองกำแพงเพชร"
 
             ppd = max(3, min(safe_int(places_per_day[i], 6), 10)) if i < len(places_per_day) else 6
+            t_start = daily_start_time[i] if i < len(daily_start_time) else "09:00"
+            t_end = daily_end_time[i] if i < len(daily_end_time) else "18:00"
 
             s_name, s_coords = parse_location(s_loc)
             e_name, e_coords = parse_location(e_loc)
 
             if "จุดสิ้นสุดของเมื่อวาน" in s_loc or "จุดสิ้นสุดของวันที่" in s_loc:
                 daily_routing_instructions += (
-                    f"[DAY_{i+1}] เริ่ม: 'จุดสิ้นสุดของเมื่อวาน', "
+                    f"[DAY_{i+1}] เวลา {t_start}-{t_end} | เริ่ม: 'จุดสิ้นสุดของเมื่อวาน', "
                     f"จบ: '{e_name}' (พิกัด: {e_coords}) | ต้องการ {ppd} สถานที่\n"
                 )
             else:
                 daily_routing_instructions += (
-                    f"[DAY_{i+1}] เริ่ม: '{s_name}' (พิกัด: {s_coords}), "
+                    f"[DAY_{i+1}] เวลา {t_start}-{t_end} | เริ่ม: '{s_name}' (พิกัด: {s_coords}), "
                     f"จบ: '{e_name}' (พิกัด: {e_coords}) | ต้องการ {ppd} สถานที่\n"
                 )
 
@@ -387,10 +399,12 @@ def plan_trip():
 
         [⚠️ คำสั่งบังคับเด็ดขาด (ห้ามฝ่าฝืน)]
         1. เลือกสถานที่จาก [ฐานข้อมูล] ด้านบนเท่านั้น!
-        2. 🛑 ผสมผสานสถานที่: ห้ามเลือกแต่สถานที่ซ้ำๆ หรือที่ดังๆ เพียงอย่างเดียว! ให้เลือก "สถานที่แปลกใหม่ (Unseen)" หรือ "ร้านอาหาร Local ลับๆ" จากในฐานข้อมูลมาผสมในทริปด้วย
-        3. โครงสร้างตาราง: จัดจำนวนสถานที่ในแต่ละวัน "ตามจำนวนที่ระบุ" ใน [จุดบังคับรายวัน] (ดูค่า 'ต้องการ N สถานที่' ของแต่ละวัน) โดยนับเฉพาะจุดเที่ยว/กิน/พัก ไม่รวมจุดเริ่ม-จบ และเรียงลำดับ (เริ่ม -> เที่ยว -> กิน -> ธรรมชาตินอกเมือง -> เที่ยวลับ/คาเฟ่ -> จบ)
-        4. ระยะเวลาขับรถ: กะระยะเวลาขับรถจริง (เช่น 20 นาที, 60 นาที) ห้ามใส่ 0 นาทีรวด
-        5. รูปแบบ: DAY_X | เวลา | ระยะเวลาขับรถ | รหัสไอคอน | ชื่อสถานที่ | ประเภท | พิกัดLat | พิกัดLng
+        2. 🛑 ใกล้เส้นทางเท่านั้น: เลือกเฉพาะสถานที่ที่อยู่ "ระหว่างทาง/ใกล้เส้นทาง" จากจุดเริ่มไปจุดจบของวันนั้น โดยดูจากพิกัด (lat,lng) ที่ให้มา ห้ามเลือกสถานที่ที่อยู่ไกลคนละทิศหรือห่างจากเส้นทางมาก (เช่นห่างเกิน ~30 กม. จากแนวเส้นทาง) เว้นแต่ลูกค้าเลือกสไตล์ธรรมชาติ/ผจญภัยโดยเฉพาะ ถ้าจะแวะที่ไกล ต้องคุ้มและไม่ทำให้ย้อนไปย้อนมา
+        3. เรียงตามตำแหน่งจริง: จัดลำดับสถานที่ให้เดินทางต่อเนื่องเป็นเส้นเดียว (ไล่จากจุดเริ่ม -> ผ่านจุดที่อยู่ระหว่างทาง -> จบที่จุดจบ) ห้ามวางสลับให้รถวิ่งย้อนกลับไปกลับมา
+        4. จำนวนสถานที่: จัดตาม "ต้องการ N สถานที่" ของแต่ละวันใน [จุดบังคับรายวัน] (นับเฉพาะจุดเที่ยว/กิน/พัก ไม่รวมจุดเริ่ม-จบ)
+        5. เวลาในตาราง: ต้องเริ่มที่ "เวลาเริ่ม" และจบไม่เกิน "เวลากลับ" ของวันนั้น (ดูใน [จุดบังคับรายวัน]) เรียงเวลาจากน้อยไปมากเสมอ ห้ามเวลากระโดดย้อนหลัง เผื่อเวลาเดินทาง+อยู่แต่ละจุดให้สมเหตุผล (ปกติอยู่จุดละ 45-90 นาที)
+        6. ระยะเวลาขับรถ: กะระยะเวลาขับรถจริงระหว่างจุด (เช่น 15 นาที, 40 นาที) ห้ามใส่ 0 นาทีรวด
+        7. รูปแบบ: DAY_X | เวลา | ระยะเวลาขับรถ | รหัสไอคอน | ชื่อสถานที่ | ประเภท | พิกัดLat | พิกัดLng
         """
 
         ai_text = call_gemini(prompt, max_tokens=8192, temperature=0.6, timeout=60)
@@ -544,6 +558,7 @@ def plan_trip():
             plan_data=clean_text,
             total_budget=total_budget,
             daily_budgets=daily_budgets,
+            daily_start_times=(daily_start_time or ['09:00']),
             fuel_consumption=fuel_consumption,
             fuel_price=fuel_price,
             google_maps_api_key=GOOGLE_MAPS_API_KEY,
@@ -557,21 +572,19 @@ def plan_trip():
         )
 
 
-@app.route('/api/chat', methods=['POST'])
-def chat_with_ai():
-    try:
-        data = request.get_json(silent=True) or {}
-        user_message = (data.get('message') or '').strip()
-        history = data.get('history') or []
-        if not user_message:
-            return jsonify({"status": "error", "response": "กรุณาพิมพ์คำถามก่อนนะครับ 😊"})
+def ask_nong_guide(user_message, history=None):
+    """
+    สมองกลางของ 'น้องไกด์' — ใช้ทั้งหน้าเว็บและ LINE
+    รับข้อความ + ประวัติแชท คืนคำตอบ (str) หรือ None ถ้าล้มเหลว
+    """
+    history = history or []
 
-        # ข้อ 1: ดึงข้อมูลสถานที่จริงมาเป็นบริบท (ใช้ cache ซ้ำ ไม่เปลืองโควต้า)
-        attractions = fetch_live_places("สถานที่ท่องเที่ยว Unseen กำแพงเพชร") or FALLBACK_MAIN
-        nature = fetch_live_places("อุทยาน ธรรมชาติ น้ำตก กำแพงเพชร") or FALLBACK_NATURE
-        food = fetch_live_places("ร้านอาหาร คาเฟ่ ร้านลับ กำแพงเพชร") or FALLBACK_FOOD
+    # ข้อ 1: ดึงข้อมูลสถานที่จริงมาเป็นบริบท (ใช้ cache ซ้ำ ไม่เปลืองโควต้า)
+    attractions = fetch_live_places("สถานที่ท่องเที่ยว Unseen กำแพงเพชร") or FALLBACK_MAIN
+    nature = fetch_live_places("อุทยาน ธรรมชาติ น้ำตก กำแพงเพชร") or FALLBACK_NATURE
+    food = fetch_live_places("ร้านอาหาร คาเฟ่ ร้านลับ กำแพงเพชร") or FALLBACK_FOOD
 
-        system_instruction = f"""คุณคือ 'น้องไกด์' ผู้ช่วยแนะนำท่องเที่ยวจังหวัดกำแพงเพชร พูดสุภาพเป็นกันเอง ตอบกระชับเข้าใจง่าย
+    system_instruction = f"""คุณคือ 'น้องไกด์' ผู้ช่วยแนะนำท่องเที่ยวจังหวัดกำแพงเพชร พูดสุภาพเป็นกันเอง ตอบกระชับเข้าใจง่าย
 ⚠️ กฎเหล็ก:
 1. แนะนำเฉพาะสถานที่ใน "จังหวัดกำแพงเพชร" เท่านั้น
 2. แนะนำโดยอ้างอิงจาก "รายการสถานที่จริง" ด้านล่างเป็นหลัก ห้ามแต่งชื่อสถานที่ที่ไม่มีในรายการ ถ้าไม่มีข้อมูลให้บอกตามตรงว่าไม่แน่ใจ
@@ -587,26 +600,110 @@ def chat_with_ai():
 {food}
 """
 
-        # ข้อ 2: ประกอบบทสนทนาพร้อมความจำย้อนหลัง (เก็บ 8 ตาล่าสุด กันยาวเกิน)
-        contents = []
-        for turn in history[-8:]:
-            role = "model" if turn.get("role") in ("bot", "model", "assistant") else "user"
-            text = (turn.get("text") or "").strip()
-            if text:
-                contents.append({"role": role, "parts": [{"text": text}]})
-        contents.append({"role": "user", "parts": [{"text": user_message}]})
+    # ข้อ 2: ประกอบบทสนทนาพร้อมความจำย้อนหลัง (เก็บ 8 ตาล่าสุด กันยาวเกิน)
+    contents = []
+    for turn in history[-8:]:
+        role = "model" if turn.get("role") in ("bot", "model", "assistant") else "user"
+        text = (turn.get("text") or "").strip()
+        if text:
+            contents.append({"role": role, "parts": [{"text": text}]})
+    contents.append({"role": "user", "parts": [{"text": user_message}]})
 
-        answer = call_gemini(
-            contents=contents,
-            system_instruction=system_instruction,
-            max_tokens=600, temperature=0.3, timeout=30, retries=1
-        )
+    return call_gemini(
+        contents=contents,
+        system_instruction=system_instruction,
+        max_tokens=600, temperature=0.3, timeout=30, retries=1
+    )
+
+
+@app.route('/api/chat', methods=['POST'])
+def chat_with_ai():
+    try:
+        data = request.get_json(silent=True) or {}
+        user_message = (data.get('message') or '').strip()
+        history = data.get('history') or []
+        if not user_message:
+            return jsonify({"status": "error", "response": "กรุณาพิมพ์คำถามก่อนนะครับ 😊"})
+
+        answer = ask_nong_guide(user_message, history)
         if answer:
             return jsonify({"status": "success", "response": answer})
         return jsonify({"status": "error", "response": "ขออภัยครับ ระบบ AI ไม่ตอบกลับในขณะนี้ ลองใหม่อีกครั้งนะครับ"})
     except Exception as e:
         logger.exception("chat ล้มเหลว: %s", e)
         return jsonify({"status": "error", "response": "ระบบขัดข้องชั่วคราว ลองใหม่อีกครั้งนะครับ"})
+
+
+# ==========================================
+# 🟢 LINE Official Account — บอทถามตอบน้องไกด์
+# ==========================================
+def verify_line_signature(body_bytes, signature):
+    """ตรวจลายเซ็นจาก LINE ว่าคำขอมาจาก LINE จริง (กันคนปลอม)"""
+    if not LINE_CHANNEL_SECRET:
+        return False
+    mac = hmac.new(LINE_CHANNEL_SECRET.encode("utf-8"), body_bytes, hashlib.sha256).digest()
+    expected = base64.b64encode(mac).decode("utf-8")
+    return hmac.compare_digest(expected, signature or "")
+
+
+def line_reply(reply_token, text):
+    """ตอบกลับข้อความไปยัง LINE"""
+    if not LINE_CHANNEL_ACCESS_TOKEN or not reply_token:
+        return
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+    }
+    payload = {
+        "replyToken": reply_token,
+        "messages": [{"type": "text", "text": (text or "")[:4900]}],
+    }
+    try:
+        requests.post(LINE_REPLY_URL, headers=headers, json=payload, timeout=10)
+    except requests.exceptions.RequestException as e:
+        logger.warning("LINE reply ล้มเหลว: %s", e)
+
+
+def process_line_events(data):
+    """ประมวลผล event จาก LINE (ทำใน background เพื่อตอบ 200 ให้ LINE เร็ว)"""
+    for event in data.get("events", []):
+        try:
+            if event.get("type") != "message":
+                continue
+            msg = event.get("message", {})
+            if msg.get("type") != "text":
+                continue
+
+            user_id = event.get("source", {}).get("userId", "anon")
+            user_text = (msg.get("text") or "").strip()
+            reply_token = event.get("replyToken")
+            if not user_text:
+                continue
+
+            hist = LINE_HISTORY.get(user_id, [])
+            answer = ask_nong_guide(user_text, hist) or "ขออภัยครับ ตอนนี้น้องไกด์ตอบไม่ได้ ลองใหม่อีกครั้งนะครับ 🙏"
+
+            # อัปเดตความจำต่อ user (เก็บ 8 คู่ล่าสุด)
+            hist = hist + [{"role": "user", "text": user_text}, {"role": "bot", "text": answer}]
+            LINE_HISTORY[user_id] = hist[-16:]
+
+            line_reply(reply_token, answer)
+        except Exception as e:
+            logger.exception("LINE event error: %s", e)
+
+
+@app.route('/line/webhook', methods=['POST'])
+def line_webhook():
+    body = request.get_data()  # อ่าน raw bytes ไว้ตรวจลายเซ็น
+    signature = request.headers.get("X-Line-Signature", "")
+    if not verify_line_signature(body, signature):
+        logger.warning("LINE: ลายเซ็นไม่ถูกต้อง (อาจตั้ง LINE_CHANNEL_SECRET ผิด)")
+        return "Bad signature", 400
+
+    data = request.get_json(silent=True) or {}
+    # ตอบ 200 ให้ LINE ทันที แล้วค่อยประมวลผล/ตอบกลับใน background
+    threading.Thread(target=process_line_events, args=(data,), daemon=True).start()
+    return "OK", 200
 
 
 @app.errorhandler(404)
