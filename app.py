@@ -124,15 +124,23 @@ def extract_gemini_text(data):
         return None
 
 
-def call_gemini(prompt, max_tokens=8192, temperature=0.6, timeout=60, retries=2):
+def call_gemini(prompt=None, contents=None, system_instruction=None,
+                max_tokens=8192, temperature=0.6, timeout=60, retries=2):
     """
     เรียก Gemini พร้อม retry + จับ error เฉพาะทาง
+    - ส่ง prompt (ข้อความเดียว) หรือ contents (บทสนทนาหลายตา) อย่างใดอย่างหนึ่ง
+    - system_instruction: บทบาท/กฎของผู้ช่วย (ไม่ปนกับข้อความผู้ใช้)
     คืนข้อความ (str) ถ้าสำเร็จ, คืน None ถ้าล้มเหลวทุกครั้ง
     """
+    if contents is None:
+        contents = [{"parts": [{"text": prompt or ""}]}]
+
     payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
+        "contents": contents,
         "generationConfig": {"maxOutputTokens": max_tokens, "temperature": temperature},
     }
+    if system_instruction:
+        payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
     headers = {"Content-Type": "application/json"}
 
     for attempt in range(retries + 1):
@@ -554,15 +562,45 @@ def chat_with_ai():
     try:
         data = request.get_json(silent=True) or {}
         user_message = (data.get('message') or '').strip()
+        history = data.get('history') or []
         if not user_message:
             return jsonify({"status": "error", "response": "กรุณาพิมพ์คำถามก่อนนะครับ 😊"})
 
-        prompt = f"""
-        คุณคือ 'น้องไกด์' ประจำ "จังหวัดกำแพงเพชร"
-        ⚠️ กฎเหล็ก: แนะนำเฉพาะสถานที่ในกำแพงเพชรเท่านั้น!
-        คำถาม: {user_message}
-        """
-        answer = call_gemini(prompt, max_tokens=500, temperature=0.4, timeout=30, retries=1)
+        # ข้อ 1: ดึงข้อมูลสถานที่จริงมาเป็นบริบท (ใช้ cache ซ้ำ ไม่เปลืองโควต้า)
+        attractions = fetch_live_places("สถานที่ท่องเที่ยว Unseen กำแพงเพชร") or FALLBACK_MAIN
+        nature = fetch_live_places("อุทยาน ธรรมชาติ น้ำตก กำแพงเพชร") or FALLBACK_NATURE
+        food = fetch_live_places("ร้านอาหาร คาเฟ่ ร้านลับ กำแพงเพชร") or FALLBACK_FOOD
+
+        system_instruction = f"""คุณคือ 'น้องไกด์' ผู้ช่วยแนะนำท่องเที่ยวจังหวัดกำแพงเพชร พูดสุภาพเป็นกันเอง ตอบกระชับเข้าใจง่าย
+⚠️ กฎเหล็ก:
+1. แนะนำเฉพาะสถานที่ใน "จังหวัดกำแพงเพชร" เท่านั้น
+2. แนะนำโดยอ้างอิงจาก "รายการสถานที่จริง" ด้านล่างเป็นหลัก ห้ามแต่งชื่อสถานที่ที่ไม่มีในรายการ ถ้าไม่มีข้อมูลให้บอกตามตรงว่าไม่แน่ใจ
+3. ถ้าผู้ใช้ถามนอกเรื่องเที่ยวกำแพงเพชร ให้ดึงกลับเข้าเรื่องอย่างสุภาพ
+
+[ที่เที่ยว / Unseen]
+{attractions}
+
+[ธรรมชาติ / นอกเมือง]
+{nature}
+
+[ร้านอาหาร / คาเฟ่]
+{food}
+"""
+
+        # ข้อ 2: ประกอบบทสนทนาพร้อมความจำย้อนหลัง (เก็บ 8 ตาล่าสุด กันยาวเกิน)
+        contents = []
+        for turn in history[-8:]:
+            role = "model" if turn.get("role") in ("bot", "model", "assistant") else "user"
+            text = (turn.get("text") or "").strip()
+            if text:
+                contents.append({"role": role, "parts": [{"text": text}]})
+        contents.append({"role": "user", "parts": [{"text": user_message}]})
+
+        answer = call_gemini(
+            contents=contents,
+            system_instruction=system_instruction,
+            max_tokens=600, temperature=0.3, timeout=30, retries=1
+        )
         if answer:
             return jsonify({"status": "success", "response": answer})
         return jsonify({"status": "error", "response": "ขออภัยครับ ระบบ AI ไม่ตอบกลับในขณะนี้ ลองใหม่อีกครั้งนะครับ"})
