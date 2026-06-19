@@ -123,6 +123,7 @@
     const dailyBudgets = dailyBudgetsStr.split(',');
     const fuelConsumption = parseFloat("{{ fuel_consumption }}") || 15;
     const fuelPrice = parseFloat("{{ fuel_price }}") || 38;
+    const dailyStartTimes = "{{ daily_start_times | join(',') }}".split(',');
     let currentDayFilter = 'all'; 
 
     function recalcBudget() {
@@ -322,6 +323,7 @@
                     setTimeout(() => calculateAndDisplayRoute(false), 500); 
                 } else {
                     applyFuelCosts(response.routes[0].legs, validRows);
+                    applyTimes(response.routes[0].legs, validRows);
                 }
             } else {
                 console.error("Directions API ล่มจ้า สาเหตุ: " + status);
@@ -345,6 +347,46 @@
             if (fuelInput) fuelInput.value = cost;
         }
         recalcBudget();
+    }
+
+    // คำนวณเวลาใหม่ตามเวลาขับจริง (แก้ปัญหาเวลามั่ว/กระโดดหลังจัดเรียงเส้นทาง)
+    function pad2(n) { return (n < 10 ? '0' : '') + n; }
+    function minToHHMM(m) { m = ((m % 1440) + 1440) % 1440; return pad2(Math.floor(m / 60)) + ':' + pad2(m % 60); }
+    function parseHHMM(s) { const p = (s || '09:00').split(':'); return (parseInt(p[0]) || 9) * 60 + (parseInt(p[1]) || 0); }
+
+    function setRowTime(row, minutes) {
+        const div = row.querySelector('td div[contenteditable]');
+        if (div) div.innerText = minToHHMM(minutes);
+    }
+    function setRowTravel(row, driveMin) {
+        const firstCell = row.querySelector('td');
+        if (!firstCell) return;
+        const divs = firstCell.querySelectorAll('div');
+        if (divs.length >= 2) divs[1].innerHTML = '<i class="fas fa-clock"></i> ~' + driveMin + ' นาที';
+    }
+
+    function applyTimes(legs, rows) {
+        if (!rows || rows.length === 0 || !legs) return;
+        let dayIdx = 0;
+        if (currentDayFilter !== 'all') {
+            dayIdx = parseInt(currentDayFilter) - 1;
+        } else {
+            // ถ้าดูรวมหลายวันพร้อมกัน ไม่คำนวณเวลาใหม่ (เวลาแต่ละวันต่อกันไม่ได้)
+            const daySet = new Set();
+            rows.forEach(r => { const m = r.className.match(/day-(\d+)/); if (m) daySet.add(m[1]); });
+            if (daySet.size > 1) return;
+        }
+        const startMin = parseHHMM(dailyStartTimes[dayIdx] || dailyStartTimes[0]);
+        const DWELL = 70; // นาทีโดยประมาณที่ใช้ในแต่ละจุด
+
+        setRowTime(rows[0], startMin);
+        let cur = startMin;
+        for (let i = 0; i < legs.length && (i + 1) < rows.length; i++) {
+            const driveMin = Math.round((legs[i].duration ? legs[i].duration.value : 0) / 60);
+            cur = cur + DWELL + driveMin;
+            setRowTime(rows[i + 1], cur);
+            setRowTravel(rows[i + 1], driveMin);
+        }
     }
 
     function optimizeCurrentView() {
