@@ -539,6 +539,7 @@
         return bubble;
     }
 
+    let chatLog = [];
     async function sendMessage() {
         const input = document.getElementById('chatInput');
         const msg = input.value.trim();
@@ -550,10 +551,14 @@
             const res = await fetch('/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: msg })
+                body: JSON.stringify({ message: msg, history: chatLog })
             });
             const data = await res.json();
-            thinking.innerText = data.response || 'ขออภัยครับ ตอบไม่ได้ตอนนี้ ลองใหม่อีกครั้งนะครับ';
+            const reply = data.response || 'ขออภัยครับ ตอบไม่ได้ตอนนี้ ลองใหม่อีกครั้งนะครับ';
+            thinking.innerText = reply;
+            chatLog.push({ role: 'user', text: msg });
+            chatLog.push({ role: 'bot', text: reply });
+            if (chatLog.length > 16) chatLog = chatLog.slice(-16);  // เก็บ 8 คู่ล่าสุด
         } catch (e) {
             thinking.innerText = 'เชื่อมต่อไม่ได้ ลองใหม่อีกครั้งนะครับ 🙏';
         }
