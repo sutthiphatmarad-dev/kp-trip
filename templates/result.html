@@ -280,6 +280,19 @@
             customMarkers.push(marker);
         });
 
+        // ทำหมุดจุดเริ่มต้น (เขียว) และจุดหมาย (แดง) ให้เด่นชัด แยกจากจุดแวะ
+        if (customMarkers.length >= 1) {
+            customMarkers[0].setIcon({ url: 'https://maps.google.com/mapfiles/ms/icons/green-dot.png', scaledSize: new google.maps.Size(46, 46) });
+            customMarkers[0].setTitle('🚩 จุดเริ่มต้น: ' + (customMarkers[0].getTitle() || ''));
+            customMarkers[0].setZIndex(999);
+        }
+        if (customMarkers.length >= 2) {
+            const lastM = customMarkers[customMarkers.length - 1];
+            lastM.setIcon({ url: 'https://maps.google.com/mapfiles/ms/icons/red-dot.png', scaledSize: new google.maps.Size(46, 46) });
+            lastM.setTitle('🏁 จุดหมาย: ' + (lastM.getTitle() || ''));
+            lastM.setZIndex(999);
+        }
+
         if (validRows.length < 2) return;
 
         const startLat = parseFloat(validRows[0].getAttribute('data-lat').replace(/[^\d.-]/g, ''));
