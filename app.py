@@ -108,6 +108,36 @@ def safe_int(value, default=0):
         return default
 
 
+def coords_str_to_tuple(s):
+    """แปลง 'lat, lng' เป็น tuple (lat, lng) แบบ string"""
+    m = re.findall(r'(-?\d+\.\d+)', s or "")
+    return (m[0], m[1]) if len(m) >= 2 else None
+
+
+def parse_db_coords(*blocks):
+    """สร้าง lookup {ชื่อสถานที่: (lat, lng)} จากฐานข้อมูลสถานที่จริง"""
+    lookup = {}
+    for block in blocks:
+        for line in (block or "").splitlines():
+            m = re.search(r'-\s*(.+?)\s*\(.*?พิกัด:\s*(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)', line)
+            if m:
+                lookup[m.group(1).strip()] = (m.group(2), m.group(3))
+    return lookup
+
+
+def match_real_coords(name, lookup):
+    """จับคู่ชื่อสถานที่กับพิกัดจริงในฐานข้อมูล (เทียบแบบ substring สองทาง)"""
+    if not name:
+        return None
+    n = name.strip()
+    if n in lookup:
+        return lookup[n]
+    for key, coords in lookup.items():
+        if key and (key in n or n in key):
+            return coords
+    return None
+
+
 def extract_gemini_text(data):
     """
     ดึงข้อความจากผลลัพธ์ Gemini อย่างปลอดภัย
@@ -350,6 +380,13 @@ def plan_trip():
         db_food = results[2] or FALLBACK_FOOD
         db_hotels = results[3] or FALLBACK_HOTEL
 
+        # lookup ชื่อ->พิกัดจริง (ใช้แทนพิกัดที่ AI สร้างเอง กันหมุดมั่ว)
+        place_coord_lookup = parse_db_coords(
+            db_attractions_main, db_attractions_outside, db_food, db_hotels
+        )
+        day_start_coords = {}  # {day_number: (lat, lng)}
+        day_end_coords = {}
+
         daily_routing_instructions = ""
         for i in range(num_days):
             s_loc = day_starts[i] if i < len(day_starts) else "ตัวเมืองกำแพงเพชร"
@@ -361,6 +398,10 @@ def plan_trip():
 
             s_name, s_coords = parse_location(s_loc)
             e_name, e_coords = parse_location(e_loc)
+
+            # เก็บพิกัดจริงของจุดเริ่ม/จบรายวัน (ใช้ปักหมุดให้ตรง)
+            day_start_coords[i + 1] = coords_str_to_tuple(s_coords)
+            day_end_coords[i + 1] = coords_str_to_tuple(e_coords)
 
             if "จุดสิ้นสุดของเมื่อวาน" in s_loc or "จุดสิ้นสุดของวันที่" in s_loc:
                 daily_routing_instructions += (
@@ -377,7 +418,7 @@ def plan_trip():
         คุณคือระบบจัดตารางทริปอัจฉริยะ ประจำ "จังหวัดกำแพงเพชร"
         ห้ามอธิบาย ห้ามใส่หัวตาราง ตอบเป็นข้อมูลดิบ | คั่นเท่านั้น!
 
-        [📌 ฐานข้อมูลสถานที่ในกำแพงเพชร]
+        [📌 ฐานข้อมูลสถานที่ในกำแพงเพชร (ข้อมูลถูกสลับมาให้แล้ว)]
         (หมวด 1: ที่เที่ยวในเมือง/Unseen)
         {db_attractions_main}
 
@@ -399,11 +440,11 @@ def plan_trip():
 
         [⚠️ คำสั่งบังคับเด็ดขาด (ห้ามฝ่าฝืน)]
         1. เลือกสถานที่จาก [ฐานข้อมูล] ด้านบนเท่านั้น!
-        2. 🛑 ใกล้เส้นทางแต่ต้องกระจาย: เลือกที่อยู่ระหว่างทาง/ใกล้เส้นทางจากจุดเริ่มไปจุดจบ และกระจายให้ทั่ว ห้ามกระจุกจุดเดียว แต่ละจุดห่างกันพอควร ห้ามไกลเกิน ~30 กม. เว้นแต่เลือกสไตล์ธรรมชาติ/ผจญภัย
-        3. เรียงตามตำแหน่งจริงให้เป็นเส้นเดียว (เริ่ม -> ผ่านจุดระหว่างทาง -> จบ) ห้ามวิ่งย้อนไปมา
-        4. จำนวนสถานที่: จัดตาม "ต้องการ N สถานที่" ของแต่ละวัน (ไม่รวมจุดเริ่ม-จบ)
-        5. เวลา: เริ่มที่ "เวลาเริ่ม" จบไม่เกิน "เวลากลับ" เรียงน้อยไปมากเสมอ เผื่อจุดละ 45-90 นาที
-        6. ระยะเวลาขับรถ: กะให้จริง (เช่น 15 นาที, 40 นาที) ห้ามใส่ 0
+        2. 🛑 ใกล้เส้นทางแต่ต้องกระจาย: เลือกสถานที่ที่อยู่ "ระหว่างทาง/ใกล้เส้นทาง" จากจุดเริ่มไปจุดจบ และ "กระจายให้ทั่วเส้นทาง" ห้ามเลือกสถานที่ที่อยู่กระจุกติดกันจุดเดียวทั้งหมด (แต่ละจุดควรห่างกันพอควร ไม่ใช่อยู่ในซอยเดียวกัน) ขณะเดียวกันก็ห้ามไกลคนละทิศหรือห่างจากแนวเส้นทางเกิน ~30 กม. เว้นแต่ลูกค้าเลือกสไตล์ธรรมชาติ/ผจญภัย
+        3. เรียงตามตำแหน่งจริง: จัดลำดับให้เดินทางต่อเนื่องเป็นเส้นเดียว (เริ่ม -> ผ่านจุดระหว่างทางไล่ตามระยะ -> จบ) ห้ามวิ่งย้อนกลับไปกลับมา และพยายามให้แต่ละจุดอยู่คนละย่าน/คนละมุมเมืองเพื่อให้ทริปหลากหลาย
+        4. จำนวนสถานที่: จัดตาม "ต้องการ N สถานที่" ของแต่ละวันใน [จุดบังคับรายวัน] (นับเฉพาะจุดเที่ยว/กิน/พัก ไม่รวมจุดเริ่ม-จบ)
+        5. เวลาในตาราง: ต้องเริ่มที่ "เวลาเริ่ม" และจบไม่เกิน "เวลากลับ" ของวันนั้น (ดูใน [จุดบังคับรายวัน]) เรียงเวลาจากน้อยไปมากเสมอ ห้ามเวลากระโดดย้อนหลัง เผื่อเวลาเดินทาง+อยู่แต่ละจุดให้สมเหตุผล (ปกติอยู่จุดละ 45-90 นาที)
+        6. ระยะเวลาขับรถ: กะระยะเวลาขับรถจริงระหว่างจุด (เช่น 15 นาที, 40 นาที) ห้ามใส่ 0 นาทีรวด
         7. รูปแบบ: DAY_X | เวลา | ระยะเวลาขับรถ | รหัสไอคอน | ชื่อสถานที่ | ประเภท | พิกัดLat | พิกัดLng
         """
 
@@ -500,13 +541,24 @@ def plan_trip():
                     if lat_f > 50 and lng_f < 50:  # สลับ lat/lng
                         lat_f, lng_f = lng_f, lat_f
                         lat_str, lng_str = str(lat_f), str(lng_f)
-
-                    is_start_or_end = ("เริ่มต้น" in name_str or "สิ้นสุด" in name_str or "เดินทาง" in name_str)
-                    if not is_start_or_end:
-                        if not (15.0 <= lat_f <= 17.5 and 98.5 <= lng_f <= 100.5):
-                            lat_str, lng_str = DEFAULT_LAT, DEFAULT_LNG
+                    if not (15.0 <= float(lat_str) <= 17.5 and 98.5 <= float(lng_str) <= 100.5):
+                        lat_str, lng_str = DEFAULT_LAT, DEFAULT_LNG
                 except ValueError:
                     lat_str, lng_str = DEFAULT_LAT, DEFAULT_LNG
+
+            # === ใช้พิกัดจริงแทนพิกัดที่ AI สร้าง (แก้หมุดมั่ว) ===
+            is_start_or_end = ("เริ่ม" in name_str or "สิ้นสุด" in name_str
+                               or "จุดจบ" in name_str or "เดินทาง" in name_str)
+            real_coords = None
+            if is_start_or_end:
+                if "สิ้นสุด" in name_str or "จุดจบ" in name_str or "จบ" in name_str:
+                    real_coords = day_end_coords.get(safe_int(day_num, 0))
+                else:
+                    real_coords = day_start_coords.get(safe_int(day_num, 0))
+            else:
+                real_coords = match_real_coords(name_str, place_coord_lookup)
+            if real_coords:
+                lat_str, lng_str = real_coords[0], real_coords[1]
 
             if "HOTEL" in extracted_icon or "พัก" in line:
                 default_price, fuel_est = str(hotel_budget), "0"
