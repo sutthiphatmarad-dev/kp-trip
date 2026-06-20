@@ -3,6 +3,7 @@ import re
 import html
 import time
 import hmac
+import math
 import base64
 import random
 import hashlib
@@ -246,6 +247,60 @@ def geocode_location(location_name):
     return None, None
 
 
+def _to_xy(lat, lon, lat0):
+    """แปลง lat/lon เป็นพิกัดระนาบ (กม.) แบบประมาณ"""
+    x = math.radians(lon) * math.cos(math.radians(lat0)) * 6371.0
+    y = math.radians(lat) * 6371.0
+    return x, y
+
+
+def point_to_segment_km(plat, plon, alat, alon, blat, blon):
+    """ระยะทาง (กม.) จากจุด P ถึงเส้นตรง A->B = น้ำหนัก 'ความใกล้เส้นทาง'"""
+    lat0 = (alat + blat) / 2.0
+    ax, ay = _to_xy(alat, alon, lat0)
+    bx, by = _to_xy(blat, blon, lat0)
+    px, py = _to_xy(plat, plon, lat0)
+    dx, dy = bx - ax, by - ay
+    seg2 = dx * dx + dy * dy
+    if seg2 == 0:
+        return math.hypot(px - ax, py - ay)
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / seg2))
+    cx, cy = ax + t * dx, ay + t * dy
+    return math.hypot(px - cx, py - cy)
+
+
+def filter_places_near_route(places_text, start_coords, end_coords, max_km=25, limit=12):
+    """
+    กรองเฉพาะสถานที่ที่อยู่ใกล้แนวเส้นทาง เริ่ม->จุดหมาย (ในระยะ max_km)
+    เรียงจากใกล้เส้นทางสุดก่อน คืน "" ถ้าไม่มีสักที่ (ให้ผู้เรียกใช้ fallback)
+    """
+    try:
+        salat, salon = [float(x.strip()) for x in start_coords.split(',')]
+        ealat, ealon = [float(x.strip()) for x in end_coords.split(',')]
+    except (ValueError, AttributeError):
+        return places_text  # พิกัดเสีย -> ไม่กรอง
+
+    kept = []
+    for line in (places_text or "").strip().split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        m = re.search(r'(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)', line)
+        if not m:
+            continue
+        plat, plon = float(m.group(1)), float(m.group(2))
+        d = point_to_segment_km(plat, plon, salat, salon, ealat, ealon)
+        if d <= max_km:
+            kept.append((d, line))
+    kept.sort(key=lambda x: x[0])
+    return "\n".join(ln for _, ln in kept[:limit])
+
+
+def _cap_lines(text, n=10):
+    lines = [l for l in (text or "").strip().split('\n') if l.strip()]
+    return "\n".join(lines[:n])
+
+
 def fetch_live_places(keyword="สถานที่ท่องเที่ยว"):
     """คืน string รายการสถานที่ หรือคืน None ถ้าหาไม่ได้/ผิดพลาด"""
     if keyword in API_CACHE:
@@ -403,47 +458,48 @@ def plan_trip():
             day_start_coords[i + 1] = coords_str_to_tuple(s_coords)
             day_end_coords[i + 1] = coords_str_to_tuple(e_coords)
 
+            # 🛣️ กราฟมีน้ำหนัก: กรองเฉพาะสถานที่ที่อยู่ "ใกล้แนวเส้นทาง" เริ่ม->จบ ของวันนี้
+            day_attr = (filter_places_near_route(db_attractions_main, s_coords, e_coords, max_km=25, limit=10)
+                        or _cap_lines(db_attractions_main, 8))
+            day_nature = (filter_places_near_route(db_attractions_outside, s_coords, e_coords, max_km=30, limit=6)
+                          or _cap_lines(db_attractions_outside, 4))
+            day_food = (filter_places_near_route(db_food, s_coords, e_coords, max_km=25, limit=8)
+                        or _cap_lines(db_food, 6))
+
             if "จุดสิ้นสุดของเมื่อวาน" in s_loc or "จุดสิ้นสุดของวันที่" in s_loc:
-                daily_routing_instructions += (
-                    f"[DAY_{i+1}] เวลา {t_start}-{t_end} | เริ่ม: 'จุดสิ้นสุดของเมื่อวาน', "
-                    f"จบ: '{e_name}' (พิกัด: {e_coords}) | ต้องการ {ppd} สถานที่\n"
-                )
+                header = (f"[DAY_{i+1}] เวลา {t_start}-{t_end} | เริ่ม: 'จุดสิ้นสุดของเมื่อวาน', "
+                          f"จบ: '{e_name}' (พิกัด: {e_coords}) | ต้องการ {ppd} สถานที่\n")
             else:
-                daily_routing_instructions += (
-                    f"[DAY_{i+1}] เวลา {t_start}-{t_end} | เริ่ม: '{s_name}' (พิกัด: {s_coords}), "
-                    f"จบ: '{e_name}' (พิกัด: {e_coords}) | ต้องการ {ppd} สถานที่\n"
-                )
+                header = (f"[DAY_{i+1}] เวลา {t_start}-{t_end} | เริ่ม: '{s_name}' (พิกัด: {s_coords}), "
+                          f"จบ: '{e_name}' (พิกัด: {e_coords}) | ต้องการ {ppd} สถานที่\n")
+
+            daily_routing_instructions += (
+                header +
+                "  ▸ ที่เที่ยว/Unseen ที่อยู่ใกล้เส้นทางวันนี้ (เลือกจากนี่):\n" + day_attr + "\n" +
+                "  ▸ ธรรมชาติ ที่อยู่ใกล้เส้นทางวันนี้:\n" + day_nature + "\n" +
+                "  ▸ ร้านอาหาร/คาเฟ่ ที่อยู่ใกล้เส้นทางวันนี้:\n" + day_food + "\n\n"
+            )
 
         prompt = f"""
         คุณคือระบบจัดตารางทริปอัจฉริยะ ประจำ "จังหวัดกำแพงเพชร"
         ห้ามอธิบาย ห้ามใส่หัวตาราง ตอบเป็นข้อมูลดิบ | คั่นเท่านั้น!
 
-        [📌 ฐานข้อมูลสถานที่ในกำแพงเพชร (ข้อมูลถูกสลับมาให้แล้ว)]
-        (หมวด 1: ที่เที่ยวในเมือง/Unseen)
-        {db_attractions_main}
-
-        (หมวด 2: ธรรมชาติ/นอกเมือง)
-        {db_attractions_outside}
-
-        (หมวด 3: ร้านอาหาร/คาเฟ่/ร้านลับโลคอล)
-        {db_food}
-
-        (หมวด 4: ที่พัก)
-        {db_hotels}
-
         [ความชอบของลูกค้า]
         สไตล์ที่เที่ยว: {str_places}
         สไตล์ที่กิน: {str_foods}
 
-        [จุดบังคับรายวัน]
+        [ที่พัก (เลือกได้ทุกวัน)]
+        {db_hotels}
+
+        [แผนรายวัน — สถานที่ในแต่ละวัน "ถูกกรองมาแล้ว" ว่าอยู่ใกล้แนวเส้นทาง เริ่ม->จุดหมาย ของวันนั้น]
         {daily_routing_instructions}
 
         [⚠️ คำสั่งบังคับเด็ดขาด (ห้ามฝ่าฝืน)]
-        1. เลือกสถานที่จาก [ฐานข้อมูล] ด้านบนเท่านั้น!
-        2. 🛑 ใกล้เส้นทางแต่ต้องกระจาย: เลือกสถานที่ที่อยู่ "ระหว่างทาง/ใกล้เส้นทาง" จากจุดเริ่มไปจุดจบ และ "กระจายให้ทั่วเส้นทาง" ห้ามเลือกสถานที่ที่อยู่กระจุกติดกันจุดเดียวทั้งหมด (แต่ละจุดควรห่างกันพอควร ไม่ใช่อยู่ในซอยเดียวกัน) ขณะเดียวกันก็ห้ามไกลคนละทิศหรือห่างจากแนวเส้นทางเกิน ~30 กม. เว้นแต่ลูกค้าเลือกสไตล์ธรรมชาติ/ผจญภัย
-        3. เรียงตามตำแหน่งจริง: จัดลำดับให้เดินทางต่อเนื่องเป็นเส้นเดียว (เริ่ม -> ผ่านจุดระหว่างทางไล่ตามระยะ -> จบ) ห้ามวิ่งย้อนกลับไปกลับมา และพยายามให้แต่ละจุดอยู่คนละย่าน/คนละมุมเมืองเพื่อให้ทริปหลากหลาย
-        4. จำนวนสถานที่: จัดตาม "ต้องการ N สถานที่" ของแต่ละวันใน [จุดบังคับรายวัน] (นับเฉพาะจุดเที่ยว/กิน/พัก ไม่รวมจุดเริ่ม-จบ)
-        5. เวลาในตาราง: ต้องเริ่มที่ "เวลาเริ่ม" และจบไม่เกิน "เวลากลับ" ของวันนั้น (ดูใน [จุดบังคับรายวัน]) เรียงเวลาจากน้อยไปมากเสมอ ห้ามเวลากระโดดย้อนหลัง เผื่อเวลาเดินทาง+อยู่แต่ละจุดให้สมเหตุผล (ปกติอยู่จุดละ 45-90 นาที)
+        1. เลือกสถานที่จากรายการ "ใกล้เส้นทางวันนี้" ของแต่ละวันเท่านั้น (และที่พักจากรายการที่พัก) ห้ามใช้สถานที่นอกรายการ เพราะรายการถูกกรองมาแล้วว่าอยู่ระหว่างทาง
+        2. กระจายให้ทั่วเส้นทาง: เลือกให้แต่ละจุดอยู่คนละย่าน ห่างกันพอควร ห้ามกระจุกติดกันจุดเดียวทั้งหมด
+        3. เรียงตามตำแหน่งจริงให้เดินทางต่อเนื่องเป็นเส้นเดียว (เริ่ม -> ไล่ผ่านจุดระหว่างทางตามระยะ -> จบ) ห้ามวิ่งย้อนกลับไปกลับมา
+        4. จำนวนสถานที่: จัดตาม "ต้องการ N สถานที่" ของแต่ละวัน (นับเฉพาะจุดเที่ยว/กิน/พัก ไม่รวมจุดเริ่ม-จบ)
+        5. เวลาในตาราง: ต้องเริ่มที่ "เวลาเริ่ม" และจบไม่เกิน "เวลากลับ" ของวันนั้น เรียงเวลาจากน้อยไปมากเสมอ ห้ามย้อนหลัง เผื่อเวลาเดินทาง+อยู่แต่ละจุด (ปกติจุดละ 45-90 นาที)
         6. ระยะเวลาขับรถ: กะระยะเวลาขับรถจริงระหว่างจุด (เช่น 15 นาที, 40 นาที) ห้ามใส่ 0 นาทีรวด
         7. รูปแบบ: DAY_X | เวลา | ระยะเวลาขับรถ | รหัสไอคอน | ชื่อสถานที่ | ประเภท | พิกัดLat | พิกัดLng
         """
