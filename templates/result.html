@@ -6,23 +6,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Sarabun', sans-serif; background-color: #f4fbf6; overflow-x: hidden; }
-        .hero-banner { background: #198754; color: white; padding: 30px 0; border-radius: 0 0 30px 30px; margin-bottom: 30px; box-shadow: 0 5px 15px rgba(25,135,84,0.3); }
+        body { font-family: 'Kanit', sans-serif; background-color: #f0f7ff; overflow-x: hidden; }
+        .hero-banner { background: #0d6efd; color: white; padding: 30px 0; border-radius: 0 0 30px 30px; margin-bottom: 30px; box-shadow: 0 5px 15px rgba(13,110,253,0.3); }
         .day-tab-container { display: flex; justify-content: center; flex-wrap: wrap; gap: 10px; margin-bottom: 15px; }
         .day-btn { font-weight: bold; border-radius: 30px; padding: 8px 20px; transition: all 0.3s; }
         
         /* 🌟 บังคับแผนที่ให้โชว์ทุกหน้าจอ 🌟 */
-        #map { height: 50vh; min-height: 450px; width: 100%; border-radius: 15px; border: 3px solid #e2f0e6; box-shadow: 0 10px 20px rgba(0,0,0,0.05); display: block; position: relative; z-index: 1; }
+        #map { height: 50vh; min-height: 450px; width: 100%; border-radius: 15px; border: 3px solid #d6e4ff; box-shadow: 0 10px 20px rgba(0,0,0,0.05); display: block; position: relative; z-index: 1; }
         
         .table-container { background: white; border-radius: 15px; padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); margin-top: 20px; }
         .btn-optimize { background: linear-gradient(45deg, #ffc107, #ff9800); color: white; border: none; font-weight: bold; transition: transform 0.2s; }
         .btn-optimize:hover { transform: scale(1.05); color: white; }
-        .green-input { border: 2px solid #198754 !important; color: #198754 !important; background-color: #f4fbf6 !important; font-weight: bold; transition: all 0.3s ease; }
-        .green-input:focus, .green-input:active { background-color: #ffffff !important; color: #198754 !important; border-color: #146c43 !important; box-shadow: 0 0 10px rgba(25,135,84,0.3) !important; outline: none; }
+        .green-input { border: 2px solid #0d6efd !important; color: #0d6efd !important; background-color: #f0f7ff !important; font-weight: bold; transition: all 0.3s ease; }
+        .green-input:focus, .green-input:active { background-color: #ffffff !important; color: #0d6efd !important; border-color: #0a58ca !important; box-shadow: 0 0 10px rgba(13,110,253,0.3) !important; outline: none; }
         .green-input::placeholder { color: #8ac0a0; font-weight: normal; }
-        .green-input option { background-color: white; color: #198754; }
+        .green-input option { background-color: white; color: #0d6efd; }
 
         /* 📱 🌟 ระบบตารางสำหรับ แท็บเล็ต & มือถือ (กันบัคเบียดกัน) 🌟 */
         .table-responsive { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -34,6 +34,17 @@
         #planTable td:nth-child(5), #planTable th:nth-child(5) { min-width: 100px; white-space: nowrap; } /* ช่องราคา */
         #planTable td:nth-child(6), #planTable th:nth-child(6) { min-width: 130px; white-space: nowrap; } /* ช่องงบรายวันคงเหลือ */
         #planTable td:nth-child(7), #planTable th:nth-child(7) { min-width: 150px; white-space: nowrap; } /* ช่องปุ่มจัดการคิว */
+    
+        /* ===== ธีมสีฟ้า: remap คลาส success(เขียว) -> ฟ้า ===== */
+        .text-success{color:#0d6efd!important;}
+        .bg-success{background-color:#0d6efd!important;}
+        .border-success{border-color:#0d6efd!important;}
+        .btn-success{background-color:#0d6efd!important;border-color:#0d6efd!important;}
+        .btn-success:hover,.btn-success:focus{background-color:#0a58ca!important;border-color:#0a58ca!important;}
+        .btn-outline-success{color:#0d6efd!important;border-color:#0d6efd!important;}
+        .btn-outline-success:hover{background-color:#0d6efd!important;color:#fff!important;}
+        .table-success,.table-success>*{background-color:#e7f1ff!important;}
+        .alert-success{background-color:#e7f1ff!important;color:#084298!important;border-color:#b6d4fe!important;}
     </style>
 </head>
 <body>
@@ -91,12 +102,12 @@
     <i class="fas fa-comments" style="font-size: 28px;"></i>
 </button>
 
-<div id="chatBox" class="card shadow-lg" style="display: none; position: fixed; bottom: 110px; right: 30px; width: 350px; height: 450px; max-width: 90vw; z-index: 1000; border-radius: 15px; border: 2px solid #198754;">
+<div id="chatBox" class="card shadow-lg" style="display: none; position: fixed; bottom: 110px; right: 30px; width: 350px; height: 450px; max-width: 90vw; z-index: 1000; border-radius: 15px; border: 2px solid #0d6efd;">
     <div class="card-header bg-success text-white d-flex justify-content-between align-items-center" style="border-radius: 12px 12px 0 0;">
         <h6 class="mb-0 fw-bold"><i class="fas fa-robot me-2"></i> น้องไกด์ AI พร้อมช่วยคุณ!</h6>
         <button id="closeChatBtn" class="btn btn-sm btn-success shadow-none"><i class="fas fa-times"></i></button>
     </div>
-    <div class="card-body" id="chatHistory" style="overflow-y: auto; background-color: #f4fbf6; display: flex; flex-direction: column; gap: 10px;">
+    <div class="card-body" id="chatHistory" style="overflow-y: auto; background-color: #f0f7ff; display: flex; flex-direction: column; gap: 10px;">
         <div class="d-flex justify-content-start">
             <div class="bg-white text-dark p-2 rounded-3 shadow-sm border" style="max-width: 80%; font-size: 0.9rem;">
                 สวัสดีครับ! ทริปกำแพงเพชรนี้ให้น้องไกด์ช่วยแนะนำอะไร พิมพ์ถามมาได้เลย! 😊
@@ -170,7 +181,7 @@
         });
         directionsService = new google.maps.DirectionsService();
         directionsRenderer = new google.maps.DirectionsRenderer({
-            map: map, suppressMarkers: true, polylineOptions: { strokeColor: "#198754", strokeWeight: 6, strokeOpacity: 0.8 } 
+            map: map, suppressMarkers: true, polylineOptions: { strokeColor: "#0d6efd", strokeWeight: 6, strokeOpacity: 0.8 } 
         });
         
         renderDayButtons(); 
