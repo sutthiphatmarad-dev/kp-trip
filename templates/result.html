@@ -158,10 +158,18 @@
             }
 
             dayRows[d].forEach(row => {
+                const remainingCell = row.querySelector('.remaining-budget');
+                // ที่พักเป็นงบแยก ไม่หักจากงบเที่ยวรายวัน
+                if (row.classList.contains('hotel-row')) {
+                    const hotelCost = parseFloat(row.querySelector('.price-activity')?.value) || 0;
+                    if (remainingCell) {
+                        remainingCell.innerHTML = '<span class="text-primary fw-bold">🏨 ที่พัก ' + hotelCost + ' ฿</span>';
+                    }
+                    return;
+                }
                 const activityCost = parseFloat(row.querySelector('.price-activity')?.value) || 0;
                 const fuelCost = parseFloat(row.querySelector('.price-fuel')?.value) || 0;
                 currentBudget -= (activityCost + fuelCost);
-                const remainingCell = row.querySelector('.remaining-budget');
                 if (remainingCell) {
                     remainingCell.innerText = currentBudget + " ฿";
                     if (currentBudget < 0) remainingCell.classList.replace('text-success', 'text-danger');
