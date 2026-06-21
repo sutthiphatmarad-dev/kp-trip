@@ -480,6 +480,14 @@ def plan_trip():
                 "  ▸ ร้านอาหาร/คาเฟ่ ที่อยู่ใกล้เส้นทางวันนี้:\n" + day_food + "\n\n"
             )
 
+        if num_days > 1:
+            hotel_block = f"[ที่พัก (ค้างคืน — ใส่ 1 แห่งที่ปลายของวันที่ต้องค้าง)]\n{db_hotels}"
+            hotel_rule = ("8. ที่พัก: ทริปนี้ค้างคืน ให้ใส่ที่พัก 1 แห่งที่ปลายของแต่ละวันที่ต้องค้างคืน "
+                          "(วันสุดท้ายถ้ากลับบ้านแล้วไม่ต้องมีที่พัก) เลือกจากรายการที่พักเท่านั้น")
+        else:
+            hotel_block = "(ทริปนี้ 1 วัน ไป-กลับวันเดียว — ไม่มีที่พัก)"
+            hotel_rule = "8. ⛔ ทริปนี้ 1 วัน (ไป-กลับวันเดียว) ห้ามใส่ที่พัก/โรงแรมในแผนเด็ดขาด"
+
         prompt = f"""
         คุณคือระบบจัดตารางทริปอัจฉริยะ ประจำ "จังหวัดกำแพงเพชร"
         ห้ามอธิบาย ห้ามใส่หัวตาราง ตอบเป็นข้อมูลดิบ | คั่นเท่านั้น!
@@ -489,7 +497,7 @@ def plan_trip():
         สไตล์ที่กิน: {str_foods}
 
         [ที่พัก (เลือกได้ทุกวัน)]
-        {db_hotels}
+        {hotel_block}
 
         [แผนรายวัน — สถานที่ในแต่ละวัน "ถูกกรองมาแล้ว" ว่าอยู่ใกล้แนวเส้นทาง เริ่ม->จุดหมาย ของวันนั้น]
         {daily_routing_instructions}
@@ -502,6 +510,7 @@ def plan_trip():
         5. เวลาในตาราง: ต้องเริ่มที่ "เวลาเริ่ม" และจบไม่เกิน "เวลากลับ" ของวันนั้น เรียงเวลาจากน้อยไปมากเสมอ ห้ามย้อนหลัง เผื่อเวลาเดินทาง+อยู่แต่ละจุด (ปกติจุดละ 45-90 นาที)
         6. ระยะเวลาขับรถ: กะระยะเวลาขับรถจริงระหว่างจุด (เช่น 15 นาที, 40 นาที) ห้ามใส่ 0 นาทีรวด
         7. รูปแบบ: DAY_X | เวลา | ระยะเวลาขับรถ | รหัสไอคอน | ชื่อสถานที่ | ประเภท | พิกัดLat | พิกัดLng
+        {hotel_rule}
         """
 
         ai_text = call_gemini(prompt, max_tokens=8192, temperature=0.6, timeout=60)
@@ -616,7 +625,13 @@ def plan_trip():
             if real_coords:
                 lat_str, lng_str = real_coords[0], real_coords[1]
 
-            if "HOTEL" in extracted_icon or "พัก" in line:
+            is_hotel = ("HOTEL" in extracted_icon or "พัก" in line)
+
+            # ทริป 1 วัน (ไป-กลับ) ไม่ต้องมีที่พักในแผน
+            if is_hotel and num_days <= 1:
+                continue
+
+            if is_hotel:
                 default_price, fuel_est = str(hotel_budget), "0"
             elif extracted_icon in ['ICON_TEMPLE', 'ICON_HISTORY']:
                 default_price, fuel_est = "100", "30"
@@ -639,8 +654,10 @@ def plan_trip():
             # ลิงก์นำทาง Google Maps (แก้ลิงก์เสียจาก markdown เดิม)
             maps_url = f"https://www.google.com/maps/search/?api=1&query={lat_str},{lng_str}"
 
+            row_extra_class = " hotel-row" if is_hotel else ""
+
             clean_text += f"""
-            <tr class="trip-row day-{day_num}" data-lat="{lat_str}" data-lng="{lng_str}" data-name="{name_safe}">
+            <tr class="trip-row day-{day_num}{row_extra_class}" data-lat="{lat_str}" data-lng="{lng_str}" data-name="{name_safe}">
                 <td class="text-center align-middle">
                     <div contenteditable="true" class="fw-bold text-success" style="font-size: 0.9rem;">{time_str}</div>
                     <div class="text-muted mt-1" style="font-size: 0.7rem;"><i class="fas fa-clock"></i> ~{travel_str}</div>
