@@ -126,16 +126,36 @@ def parse_db_coords(*blocks):
     return lookup
 
 
+def _norm_name(s):
+    """ตัดคำนำหน้า/วงเล็บ/เว้นวรรค เพื่อเทียบชื่อให้ยืดหยุ่นขึ้น"""
+    s = s or ""
+    s = re.sub(r'^\s*(จุดเริ่มต้น|จุดสิ้นสุด|เริ่มต้น|สิ้นสุด)\s*[:：\-]\s*', '', s)
+    s = re.sub(r'\(.*?\)', '', s)        # ตัดวงเล็บ เช่น (ร้านลับ)
+    s = re.sub(r'[\s\u200b\.\,]+', '', s)  # ตัดเว้นวรรค/จุด/จุลภาค
+    return s.strip().lower()
+
+
 def match_real_coords(name, lookup):
-    """จับคู่ชื่อสถานที่กับพิกัดจริงในฐานข้อมูล (เทียบแบบ substring สองทาง)"""
+    """จับคู่ชื่อสถานที่กับพิกัดจริงในฐานข้อมูล (เทียบแบบ normalize + substring + คำสำคัญ)"""
     if not name:
         return None
     n = name.strip()
     if n in lookup:
         return lookup[n]
+    nn = _norm_name(n)
+    if not nn:
+        return None
+    # 1) normalize + substring สองทาง
     for key, coords in lookup.items():
-        if key and (key in n or n in key):
+        kn = _norm_name(key)
+        if kn and (kn == nn or kn in nn or nn in kn):
             return coords
+    # 2) fallback: แชร์ "คำสำคัญ" (ยาว >= 4 ตัวอักษร) ร่วมกัน
+    name_words = [w for w in re.split(r'[\s\(\)\.,:：\-]+', n) if len(w) >= 4]
+    for key, coords in lookup.items():
+        for w in name_words:
+            if w and w in key:
+                return coords
     return None
 
 
@@ -623,6 +643,9 @@ def plan_trip():
                     real_coords = day_start_coords.get(safe_int(day_num, 0))
             else:
                 real_coords = match_real_coords(name_str, place_coord_lookup)
+                # จับคู่พิกัดจริงไม่ได้ = AI มั่วชื่อ/ไม่อยู่ในรายการ -> ตัดทิ้ง กันหมุดลอยกลางน้ำ
+                if not real_coords:
+                    continue
             if real_coords:
                 lat_str, lng_str = real_coords[0], real_coords[1]
 
