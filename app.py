@@ -534,7 +534,7 @@ def plan_trip():
         {hotel_rule}
         """
 
-        ai_text = call_gemini(prompt, max_tokens=8192, temperature=0.6, timeout=45, retries=1)
+        ai_text = call_gemini(prompt, max_tokens=8192, temperature=0.6, timeout=55, retries=0)
         if not ai_text:
             return render_friendly_error(
                 "ระบบ AI ไม่ตอบกลับในขณะนี้ (อาจมีผู้ใช้งานหนาแน่นหรือสัญญาณขัดข้อง) "
