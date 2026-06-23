@@ -322,45 +322,53 @@ def _cap_lines(text, n=10):
 
 
 def fetch_live_places(keyword="สถานที่ท่องเที่ยว"):
-    """คืน string รายการสถานที่ หรือคืน None ถ้าหาไม่ได้/ผิดพลาด"""
+    """ดึงสถานที่จริงด้วย Places API (New). คืน string หรือ None ถ้าหาไม่ได้"""
     if keyword in API_CACHE:
         return API_CACHE[keyword]
 
-    url = (f"https://maps.googleapis.com/maps/api/place/textsearch/json"
-           f"?query={keyword}&language=th&region=th&key={GOOGLE_MAPS_API_KEY}")
+    url = "https://places.googleapis.com/v1/places:searchText"
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+        "X-Goog-FieldMask": ("places.displayName,places.formattedAddress,"
+                             "places.location,places.rating,places.userRatingCount"),
+    }
+    body = {"textQuery": keyword, "languageCode": "th", "regionCode": "TH", "maxResultCount": 20}
     try:
-        response = requests.get(url, timeout=5)
+        response = requests.post(url, headers=headers, json=body, timeout=5)
+        if response.status_code != 200:
+            logger.info("Places API (New) HTTP %s สำหรับ '%s': %s",
+                        response.status_code, keyword, response.text[:200])
+            return None
+
         data = response.json()
         results = []
-        if data.get('status') == 'OK':
-            for place in data.get('results', []):
-                name = place.get('name', 'ไม่ระบุชื่อ')
-                address = place.get('formatted_address', '').lower()
+        for place in data.get('places', []):
+            name = (place.get('displayName') or {}).get('text', 'ไม่ระบุชื่อ')
+            address = (place.get('formattedAddress') or '').lower()
 
-                if ("กำแพงเพชร" not in address and "kamphaeng" not in address
-                        and "กำแพง" not in address):
-                    continue
+            if ("กำแพงเพชร" not in address and "kamphaeng" not in address
+                    and "กำแพง" not in address):
+                continue
 
-                rating = place.get('rating', 'ไม่มีดาว')
-                total_ratings = place.get('user_ratings_total', 0)
-                try:
-                    p_lat = place['geometry']['location']['lat']
-                    p_lng = place['geometry']['location']['lng']
-                except (KeyError, TypeError):
-                    continue
+            rating = place.get('rating', 'ไม่มีดาว')
+            total_ratings = place.get('userRatingCount', 0)
+            loc = place.get('location') or {}
+            p_lat = loc.get('latitude')
+            p_lng = loc.get('longitude')
+            if p_lat is None or p_lng is None:
+                continue
 
-                if total_ratings > 3:
-                    results.append(f"- {name} (⭐ {rating}) | พิกัด: {p_lat}, {p_lng}")
-                    if len(results) >= 20:
-                        break
+            if total_ratings > 3:
+                results.append(f"- {name} (⭐ {rating}) | พิกัด: {p_lat}, {p_lng}")
+                if len(results) >= 20:
+                    break
 
-            if results:
-                random.shuffle(results)
-                final_res = "\n".join(results)
-                API_CACHE[keyword] = final_res
-                return final_res
-        else:
-            logger.info("Places API status=%s สำหรับ '%s'", data.get('status'), keyword)
+        if results:
+            random.shuffle(results)
+            final_res = "\n".join(results)
+            API_CACHE[keyword] = final_res
+            return final_res
     except (requests.exceptions.RequestException, ValueError) as e:
         logger.warning("fetch_live_places ล้มเหลว ('%s'): %s", keyword, e)
 
