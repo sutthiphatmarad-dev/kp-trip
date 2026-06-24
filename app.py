@@ -3,6 +3,7 @@ import re
 import html
 import time
 import hmac
+import json
 import math
 import base64
 import random
@@ -105,6 +106,50 @@ FALLBACK_HOTEL = """
 - กำแพงเพชร ริเวอร์วิว รีสอร์ท (⭐ 4.3) | พิกัด: 16.4720, 99.5290
 - บ้านสวน รีสอร์ท (⭐ 4.1) | พิกัด: 16.4880, 99.5320
 """
+
+
+def load_curated_places():
+    """
+    อ่าน places.json (ถ้ามี) เพื่อให้ผู้ใช้ "เพิ่มฐานข้อมูลสถานที่เอง" ได้ง่ายๆ
+    รูปแบบไฟล์: {"attractions":[{"name","rating","lat","lng"}], "nature":[...], "food":[...], "hotels":[...]}
+    คืน dict ของ category -> ข้อความรายการ (พร้อมพิกัด)
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "places.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (FileNotFoundError, ValueError, OSError):
+        return {}
+
+    out = {}
+    for cat, items in (data or {}).items():
+        lines = []
+        for it in (items or []):
+            name = (it or {}).get("name")
+            lat = it.get("lat")
+            lng = it.get("lng")
+            rating = it.get("rating", "")
+            if name and lat is not None and lng is not None:
+                star = f"⭐ {rating}" if rating != "" else "⭐ -"
+                lines.append(f"- {name} ({star}) | พิกัด: {lat}, {lng}")
+        if lines:
+            out[cat] = "\n".join(lines)
+    return out
+
+
+# ถ้ามี places.json -> ใช้แทนฐานข้อมูลสำรองในโค้ด (ผู้ใช้แก้ไฟล์นี้เพื่อเพิ่มสถานที่ได้เอง)
+_CURATED = load_curated_places()
+if _CURATED.get("attractions"):
+    FALLBACK_MAIN = _CURATED["attractions"]
+if _CURATED.get("nature"):
+    FALLBACK_NATURE = _CURATED["nature"]
+if _CURATED.get("food"):
+    FALLBACK_FOOD = _CURATED["food"]
+if _CURATED.get("hotels"):
+    FALLBACK_HOTEL = _CURATED["hotels"]
+if _CURATED:
+    logger.info("โหลด places.json สำเร็จ: %s",
+                {k: len(v.splitlines()) for k, v in _CURATED.items()})
 
 KNOWN_LOCATIONS = {
     "ตัวเมืองกำแพงเพชร": ("16.4828", "99.5227"),
@@ -498,6 +543,9 @@ def plan_trip():
         )
         day_start_coords = {}  # {day_number: (lat, lng)}
         day_end_coords = {}
+        day_start_names = {}    # {day_number: ชื่อจุดเริ่ม}
+        day_end_names = {}      # {day_number: ชื่อจุดจบ}
+        day_time_window = {}    # {day_number: (เวลาเริ่ม, เวลากลับ)}
 
         daily_routing_instructions = ""
         for i in range(num_days):
@@ -514,6 +562,9 @@ def plan_trip():
             # เก็บพิกัดจริงของจุดเริ่ม/จบรายวัน (ใช้ปักหมุดให้ตรง)
             day_start_coords[i + 1] = coords_str_to_tuple(s_coords)
             day_end_coords[i + 1] = coords_str_to_tuple(e_coords)
+            day_start_names[i + 1] = s_name
+            day_end_names[i + 1] = e_name
+            day_time_window[i + 1] = (t_start, t_end)
 
             # 🛣️ กรองสถานที่ตามตำแหน่ง (แบบผสม) ของวันนี้ — ระยะกว้างขึ้น + จำนวนมากขึ้น
             day_attr = (filter_places_near_route(db_attractions_main, s_coords, e_coords, max_km=40, limit=18)
@@ -589,50 +640,70 @@ def plan_trip():
             'ICON_OTHER': "https://img.icons8.com/color/96/map-pin.png",
         }
 
-        clean_text = ""
-        current_day = ""
+        # ---------- helper สร้างแถวตาราง 1 แถว ----------
+        def render_trip_row(d_num, time_str, travel_str, icon, name, cat,
+                            lat, lng, price, fuel, is_hotel=False):
+            name_safe = html.escape(name or "จุดแวะพัก", quote=True)
+            cat_safe = html.escape(cat or "ทั่วไป", quote=True)
+            img_src = icon_dict.get(icon, icon_dict['ICON_OTHER'])
+            maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lng}"
+            extra = " hotel-row" if is_hotel else ""
+            return f'''
+            <tr class="trip-row day-{d_num}{extra}" data-lat="{lat}" data-lng="{lng}" data-name="{name_safe}">
+                <td class="text-center align-middle">
+                    <div contenteditable="true" class="fw-bold text-success" style="font-size: 0.9rem;">{html.escape(str(time_str))}</div>
+                    <div class="text-muted mt-1" style="font-size: 0.7rem;"><i class="fas fa-clock"></i> ~{html.escape(str(travel_str))}</div>
+                </td>
+                <td class="text-center align-middle"><img src="{img_src}" class="place-icon bg-white shadow-sm rounded-circle" style="width:40px;height:40px;"></td>
+                <td class="align-middle">
+                    <div class="fw-bold text-dark">{name_safe}</div>
+                    <span class="badge rounded-pill bg-light text-dark border mt-1">{cat_safe}</span><br>
+                    <a href="{maps_url}" target="_blank" rel="noopener" class="btn btn-sm btn-outline-primary mt-2"><i class="fas fa-location-arrow"></i> นำทาง</a>
+                </td>
+                <td class="align-middle"><input type="number" class="form-control form-control-sm price-activity green-input" value="{price}" onchange="recalcBudget()"></td>
+                <td class="align-middle"><input type="number" class="form-control form-control-sm price-fuel green-input" value="{fuel}" onchange="recalcBudget()"></td>
+                <td class="text-end fw-bold text-success align-middle remaining-budget">...</td>
+                <td class="text-center align-middle">
+                    <div class="btn-group flex-wrap">
+                        <button type="button" onclick="moveRow(this, -1)" class="btn btn-outline-success btn-sm" title="ขึ้น"><i class="fas fa-arrow-up"></i></button>
+                        <button type="button" onclick="moveRow(this, 1)" class="btn btn-outline-success btn-sm" title="ลง"><i class="fas fa-arrow-down"></i></button>
+                        <button type="button" onclick="delRow(this)" class="btn btn-danger btn-sm" title="ลบ"><i class="fas fa-trash"></i></button>
+                    </div>
+                </td>
+            </tr>
+            '''
+
+        # ---------- รอบ 1: เก็บจุดแวะกลาง (ข้ามจุดเริ่ม/จบของ AI เพราะจะเติมเอง) ----------
         ai_text = ai_text.replace('```', '').replace('text', '').replace('*', '').strip()
+        days_stops = {}  # {day_num(int): [stop, ...]}
 
         for line in ai_text.split('\n'):
             if '|' not in line or 'DAY_' not in line.upper():
                 continue
-
             parts = [p.strip() for p in line.split('|')]
             if len(parts) < 3:
                 continue
-
             day_match = re.search(r'DAY_(\d+)', line.upper())
             if not day_match:
                 continue
-            day_num = day_match.group(1)
-
-            if f"DAY_{day_num}" != current_day:
-                current_day = f"DAY_{day_num}"
-                clean_text += f"""
-                <tr class="table-success day-divider" data-day="{day_num}">
-                    <td colspan="7" class="text-center fw-bold text-success fs-5 py-3">
-                        <i class="fas fa-calendar-day me-2"></i> วันที่ {day_num} <span class="daily-budget-label fs-6"></span>
-                    </td>
-                </tr>
-                """
+            d = safe_int(day_match.group(1), 0)
 
             name_str = parts[4] if len(parts) >= 8 else "จุดแวะพัก"
             cat_str = parts[5] if len(parts) >= 8 else "ทั่วไป"
             name_str = re.sub(r'ICON_[A-Z_]+', '', name_str).strip()
-
             if "ไม่พบข้อมูล" in name_str:
                 continue
 
-            # ป้องกัน HTML แตกจากชื่อที่มีอักขระพิเศษ
-            name_safe = html.escape(name_str or "จุดแวะพัก", quote=True)
-            cat_safe = html.escape(cat_str or "ทั่วไป", quote=True)
+            # ข้ามจุดเริ่ม/จบที่ AI ใส่มา (เราจะเติมเองให้ตรงเสมอ)
+            if ("เริ่ม" in name_str or "สิ้นสุด" in name_str
+                    or "จุดจบ" in name_str or "เดินทาง" in name_str):
+                continue
 
             extracted_icon = 'ICON_OTHER'
             imatch = re.search(r'(ICON_[A-Z_]+)', line.upper())
             if imatch and imatch.group(1) in icon_dict:
                 extracted_icon = imatch.group(1)
             else:
-                # เดาจากชื่อ+ประเภท เรียงจากเฉพาะเจาะจงไปกว้าง (ลำดับสำคัญมาก)
                 t = f"{name_str} {cat_str}"
                 if re.search(r'(คาเฟ่|กาแฟ|coffee|cafe|เบเกอรี่|เค้ก|ชานม|ชาไทย)', t, re.IGNORECASE):
                     extracted_icon = 'ICON_CAFE'
@@ -646,101 +717,70 @@ def plan_trip():
                     extracted_icon = 'ICON_MARKET'
                 elif re.search(r'(โรงแรม|รีสอร์ท|รีสอร์ต|ที่พัก|โฮมสเตย์|เกสต์เฮาส์|นอน|hotel|resort)', t, re.IGNORECASE):
                     extracted_icon = 'ICON_HOTEL'
-                elif re.search(r'(ร้านอาหาร|อาหาร|กิน|ข้าว|ก๋วยเตี๋ยว|ครัว|ภัตตาคาร|หมูกระทะ|ซีฟู้ด|ก๋วยเตี๋ยว|food|restaurant)', t, re.IGNORECASE):
+                elif re.search(r'(ร้านอาหาร|อาหาร|กิน|ข้าว|ก๋วยเตี๋ยว|ครัว|ภัตตาคาร|หมูกระทะ|ซีฟู้ด|food|restaurant)', t, re.IGNORECASE):
                     extracted_icon = 'ICON_FOOD'
 
-            img_src = icon_dict.get(extracted_icon, icon_dict['ICON_OTHER'])
-
-            time_str = html.escape(parts[1].strip() if len(parts) > 1 else "00:00")
-            travel_str = html.escape(parts[2].strip() if len(parts) > 2 else "0 นาที")
-
-            coords = re.findall(r'(\d{2,3}\.\d{4,})', line)
-            lat_str, lng_str = DEFAULT_LAT, DEFAULT_LNG
-            if len(coords) >= 2:
-                lat_str, lng_str = coords[0], coords[1]
-                try:
-                    lat_f = float(lat_str)
-                    lng_f = float(lng_str)
-                    if lat_f > 50 and lng_f < 50:  # สลับ lat/lng
-                        lat_f, lng_f = lng_f, lat_f
-                        lat_str, lng_str = str(lat_f), str(lng_f)
-                    if not (15.0 <= float(lat_str) <= 17.5 and 98.5 <= float(lng_str) <= 100.5):
-                        lat_str, lng_str = DEFAULT_LAT, DEFAULT_LNG
-                except ValueError:
-                    lat_str, lng_str = DEFAULT_LAT, DEFAULT_LNG
-
-            # === ใช้พิกัดจริงแทนพิกัดที่ AI สร้าง (แก้หมุดมั่ว) ===
-            is_start_or_end = ("เริ่ม" in name_str or "สิ้นสุด" in name_str
-                               or "จุดจบ" in name_str or "เดินทาง" in name_str)
-            real_coords = None
-            if is_start_or_end:
-                if "สิ้นสุด" in name_str or "จุดจบ" in name_str or "จบ" in name_str:
-                    real_coords = day_end_coords.get(safe_int(day_num, 0))
-                else:
-                    real_coords = day_start_coords.get(safe_int(day_num, 0))
-            else:
-                real_coords = match_real_coords(name_str, place_coord_lookup)
-                # จับคู่พิกัดจริงไม่ได้ = AI มั่วชื่อ/ไม่อยู่ในรายการ -> ตัดทิ้ง กันหมุดลอยกลางน้ำ
-                if not real_coords:
-                    continue
-            if real_coords:
-                lat_str, lng_str = real_coords[0], real_coords[1]
-
-            is_hotel = ("HOTEL" in extracted_icon or "พัก" in line)
-
-            # ทริป 1 วัน (ไป-กลับ) ไม่ต้องมีที่พักในแผน
+            is_hotel = (extracted_icon == 'ICON_HOTEL')
             if is_hotel and num_days <= 1:
                 continue
 
+            real_coords = match_real_coords(name_str, place_coord_lookup)
+            if not real_coords:
+                continue
+            lat_str, lng_str = real_coords[0], real_coords[1]
+
             if is_hotel:
-                default_price, fuel_est = str(hotel_budget), "0"
+                price, fuel = str(hotel_budget), "0"
             elif extracted_icon in ['ICON_TEMPLE', 'ICON_HISTORY']:
-                default_price, fuel_est = "100", "30"
+                price, fuel = "100", "30"
             elif extracted_icon == 'ICON_NATURE':
-                default_price, fuel_est = "100", "60"
+                price, fuel = "100", "60"
             elif extracted_icon == 'ICON_FOOD':
-                default_price, fuel_est = "150", "20"
+                price, fuel = "150", "20"
             elif extracted_icon == 'ICON_CAFE':
-                default_price, fuel_est = "120", "20"
+                price, fuel = "120", "20"
             elif extracted_icon == 'ICON_MARKET':
-                default_price, fuel_est = "200", "20"
+                price, fuel = "200", "20"
             else:
-                default_price, fuel_est = "100", "30"
+                price, fuel = "100", "30"
 
-            is_start_or_end = ("เริ่มต้น" in name_str or "สิ้นสุด" in name_str
-                               or "เดินทาง" in name_str or "จุดเริ่ม" in name_str)
-            if is_start_or_end:
-                default_price, fuel_est = "0", "0"
+            days_stops.setdefault(d, []).append({
+                "time": parts[1].strip() if len(parts) > 1 else "",
+                "travel": parts[2].strip() if len(parts) > 2 else "0 นาที",
+                "icon": extracted_icon, "name": name_str, "cat": cat_str,
+                "lat": lat_str, "lng": lng_str,
+                "price": price, "fuel": fuel, "is_hotel": is_hotel,
+            })
 
-            # ลิงก์นำทาง Google Maps (แก้ลิงก์เสียจาก markdown เดิม)
-            maps_url = f"https://www.google.com/maps/search/?api=1&query={lat_str},{lng_str}"
-
-            row_extra_class = " hotel-row" if is_hotel else ""
-
-            clean_text += f"""
-            <tr class="trip-row day-{day_num}{row_extra_class}" data-lat="{lat_str}" data-lng="{lng_str}" data-name="{name_safe}">
-                <td class="text-center align-middle">
-                    <div contenteditable="true" class="fw-bold text-success" style="font-size: 0.9rem;">{time_str}</div>
-                    <div class="text-muted mt-1" style="font-size: 0.7rem;"><i class="fas fa-clock"></i> ~{travel_str}</div>
-                </td>
-                <td class="text-center align-middle"><img src="{img_src}" class="place-icon bg-white shadow-sm rounded-circle" style="width:40px;height:40px;"></td>
-                <td class="align-middle">
-                    <div class="fw-bold text-dark">{name_safe}</div>
-                    <span class="badge rounded-pill bg-light text-dark border mt-1">{cat_safe}</span><br>
-                    <a href="{maps_url}" target="_blank" rel="noopener" class="btn btn-sm btn-outline-primary mt-2"><i class="fas fa-location-arrow"></i> นำทาง</a>
-                </td>
-                <td class="align-middle"><input type="number" class="form-control form-control-sm price-activity green-input" value="{default_price}" onchange="recalcBudget()"></td>
-                <td class="align-middle"><input type="number" class="form-control form-control-sm price-fuel green-input" value="{fuel_est}" onchange="recalcBudget()"></td>
-                <td class="text-end fw-bold text-success align-middle remaining-budget">...</td>
-                <td class="text-center align-middle">
-                    <div class="btn-group flex-wrap">
-                        <button type="button" onclick="moveRow(this, -1)" class="btn btn-outline-success btn-sm" title="ขึ้น"><i class="fas fa-arrow-up"></i></button>
-                        <button type="button" onclick="moveRow(this, 1)" class="btn btn-outline-success btn-sm" title="ลง"><i class="fas fa-arrow-down"></i></button>
-                        <button type="button" onclick="delRow(this)" class="btn btn-danger btn-sm" title="ลบ"><i class="fas fa-trash"></i></button>
-                    </div>
-                </td>
-            </tr>
-            """
+        # ---------- รอบ 2: สร้างตาราง เติมจุดเริ่ม/จุดจบเองทุกวัน ----------
+        clean_text = ""
+        for d in range(1, num_days + 1):
+            t_start, t_end = day_time_window.get(d, ("09:00", "18:00"))
+            clean_text += f'''
+                <tr class="table-success day-divider" data-day="{d}">
+                    <td colspan="7" class="text-center fw-bold text-success fs-5 py-3">
+                        <i class="fas fa-calendar-day me-2"></i> วันที่ {d} <span class="daily-budget-label fs-6"></span>
+                    </td>
+                </tr>
+                '''
+            # จุดเริ่มต้น (เติมเองเสมอ ใช้พิกัดที่ผู้ใช้เลือก)
+            sc = day_start_coords.get(d) or (DEFAULT_LAT, DEFAULT_LNG)
+            s_nm = day_start_names.get(d) or "ตัวเมืองกำแพงเพชร"
+            clean_text += render_trip_row(d, t_start, "0 นาที", 'ICON_OTHER',
+                                          f"จุดเริ่มต้น: {s_nm}", "จุดเริ่มต้น",
+                                          sc[0], sc[1], "0", "0")
+            # จุดแวะกลาง
+            for stop in days_stops.get(d, []):
+                clean_text += render_trip_row(
+                    d, stop["time"] or t_start, stop["travel"], stop["icon"],
+                    stop["name"], stop["cat"], stop["lat"], stop["lng"],
+                    stop["price"], stop["fuel"], is_hotel=stop["is_hotel"])
+            # จุดสิ้นสุด (เติมเองเสมอ ใช้พิกัดที่ผู้ใช้เลือก)
+            ec = day_end_coords.get(d) or (DEFAULT_LAT, DEFAULT_LNG)
+            e_nm = day_end_names.get(d) or "ตัวเมืองกำแพงเพชร"
+            clean_text += render_trip_row(d, t_end, "", 'ICON_OTHER',
+                                          f"จุดสิ้นสุด: {e_nm}", "จุดสิ้นสุด",
+                                          ec[0], ec[1], "0", "0")
 
         if not clean_text.strip():
             return render_friendly_error(
