@@ -289,7 +289,10 @@ def plan_trip():
         """
         payload = {"contents": [{"parts": [{"text": prompt}]}],
                    "generationConfig": {"maxOutputTokens": 8192, "temperature": 0.6}}
-        resp = requests.post(GEMINI_API_URL, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
+                try:
+                    resp = requests.post(GEMINI_API_URL, headers={"Content-Type": "application/json"}, json=payload, timeout=100)
+                except requests.exceptions.Timeout:
+                    return render_template("index.html", error="AI ใช้เวลาตอบนานเกินไป ลองกดสร้างแผนอีกครั้ง หรือลดจำนวนวันลง"), 504
         if resp.status_code != 200:
             try:
                 detail = resp.json().get("error", {}).get("message", "")
