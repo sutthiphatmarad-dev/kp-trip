@@ -291,7 +291,11 @@ def plan_trip():
                    "generationConfig": {"maxOutputTokens": 8192, "temperature": 0.6}}
         resp = requests.post(GEMINI_API_URL, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
         if resp.status_code != 200:
-            return render_template("index.html", error=f"AI ตอบกลับผิดพลาด (รหัส {resp.status_code}) ลองใหม่อีกครั้ง"), 502
+            try:
+                detail = resp.json().get("error", {}).get("message", "")
+            except Exception:
+                detail = resp.text[:200]
+            return render_template("index.html", error=f"AI ตอบกลับผิดพลาด (รหัส {resp.status_code}): {detail}"), 502
 
         candidates = resp.json().get("candidates", [])
         if not candidates:
