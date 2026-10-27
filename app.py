@@ -16,13 +16,22 @@ app = Flask(__name__)
 # ==========================================
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+
+
+def clean_model(name):
+    """ล้างชื่อโมเดลที่ใส่ผิดรูปแบบ: ช่องว่าง เครื่องหมายคำพูด หรือมี models/ นำหน้า"""
+    name = (name or "").strip().strip("\"'").strip()
+    if name.startswith("models/"):
+        name = name[len("models/"):]
+    return name.replace(" ", "-").lower()
+
+
+GEMINI_MODEL = clean_model(os.environ.get("GEMINI_MODEL")) or "gemini-3.8-flash"
+GEMINI_FALLBACK_MODEL = clean_model(os.environ.get("GEMINI_FALLBACK_MODEL"))
 GEMINI_API_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
 )
-
-GEMINI_FALLBACK_MODEL = os.environ.get("GEMINI_FALLBACK_MODEL", "")
 
 
 def call_gemini(payload, budget=105):
