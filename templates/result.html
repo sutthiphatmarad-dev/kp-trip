@@ -71,6 +71,7 @@ body{font-family:'IBM Plex Sans Thai',sans-serif;background:var(--sage);color:va
 </div></header>
 
 <main class="container-xl pb-5">
+  {% if notice %}<div class="alert alert-warning mt-3 mb-0">{{ notice }}</div>{% endif %}
   <div class="tabs" id="tabs" role="tablist"></div>
   <div class="row g-3">
     <div class="col-lg-7 order-lg-2 mapcol-wrap"><div class="mapcol">
