@@ -16,22 +16,23 @@ app = Flask(__name__)
 # ==========================================
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
-
-
 def clean_model(name):
     """ล้างชื่อโมเดลที่ใส่ผิดรูปแบบ: ช่องว่าง เครื่องหมายคำพูด หรือมี models/ นำหน้า"""
     name = (name or "").strip().strip("\"'").strip()
     if name.startswith("models/"):
         name = name[len("models/"):]
-    return name.replace(" ", "-").lower()
+    name = name.replace(" ", "-").lower()
+    # ชื่อโมเดลต้องขึ้นต้นด้วย gemini เท่านั้น (กันเผลอวางคีย์หรือค่าอื่นลงช่องนี้)
+    return name if name.startswith("gemini") else ""
 
 
 GEMINI_MODEL = clean_model(os.environ.get("GEMINI_MODEL")) or "gemini-3.8-flash"
-GEMINI_FALLBACK_MODEL = clean_model(os.environ.get("GEMINI_FALLBACK_MODEL"))
 GEMINI_API_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
 )
+
+GEMINI_FALLBACK_MODEL = clean_model(os.environ.get("GEMINI_FALLBACK_MODEL"))
 
 
 def call_gemini(payload, budget=105):
@@ -245,6 +246,77 @@ def parse_plan(ai_text, consumption, fuel_price):
     return stops
 
 
+
+def parse_db_places(text):
+    """แปลงข้อความฐานข้อมูลสถานที่ ('- ชื่อ (⭐ x) | พิกัด: lat, lng') เป็น list ของ dict"""
+    out = []
+    for line in text.split("\n"):
+        m = re.match(r"-\s*(.+?)\s*\(⭐[^)]*\)\s*\|\s*พิกัด:\s*(-?\d+\.\d+),\s*(-?\d+\.\d+)", line.strip())
+        if m:
+            out.append({"name": m.group(1), "lat": float(m.group(2)), "lng": float(m.group(3))})
+    return out
+
+
+def build_fallback_plan(db, num_days, start, end, start_time, end_time, consumption, fuel_price):
+    """จัดทริปเองโดยไม่ใช้ AI (ใช้เมื่อ Gemini ล่ม): เที่ยว -> กิน -> ธรรมชาติ/เที่ยว -> คาเฟ่/กิน -> เที่ยว"""
+    main, nature, food = (parse_db_places(db[i]) for i in (0, 1, 2))
+    for lst in (main, nature, food):
+        random.shuffle(lst)
+    cafes = [p for p in food if guess_icon(p["name"]) == "CAFE"]
+    meals = [p for p in food if p not in cafes] or food
+
+    def take(lst, used, ref):
+        """เลือกสถานที่ที่ยังไม่ใช้และใกล้จุดก่อนหน้าที่สุด"""
+        free = [p for p in lst if p["name"] not in used] or lst
+        if not free:
+            return None
+        p = min(free, key=lambda q: haversine_km(ref[0], ref[1], q["lat"], q["lng"]))
+        used.add(p["name"])
+        return p
+
+    def hm(t, default):
+        try:
+            h, m = t.split(":")[:2]
+            return int(h) * 60 + int(m)
+        except Exception:
+            return default
+
+    t0, t1 = hm(start_time, 540), hm(end_time, 1080)
+    used, stops = set(), []
+    for day in range(1, num_days + 1):
+        near_nature = [p for p in nature if haversine_km(start[1], start[2], p["lat"], p["lng"]) <= 50]
+        use_nature = day % 2 == 1 and near_nature
+        seq = [("main", main), ("meal", meals), ("nature" if use_nature else "main", near_nature if use_nature else main),
+               ("cafe", cafes or meals), ("main", main)]
+        picks = [("START", {"name": f"เริ่มต้นเดินทาง: {start[0]}", "lat": start[1], "lng": start[2]})]
+        ref = (start[1], start[2])
+        for kind, pool in seq:
+            p = take(pool, used, ref)
+            if p:
+                picks.append((kind, p))
+                ref = (p["lat"], p["lng"])
+        picks.append(("END", {"name": f"สิ้นสุดการเดินทาง: {end[0]}", "lat": end[1], "lng": end[2]}))
+
+        step = (t1 - t0) / max(len(picks) - 1, 1)
+        prev = None
+        for i, (kind, p) in enumerate(picks):
+            minutes = t0 + round(step * i)
+            icon = {"START": "OTHER", "END": "OTHER"}.get(kind) or guess_icon(p["name"])
+            if kind == "meal" and icon == "OTHER": icon = "FOOD"
+            if kind == "cafe" and icon in ("OTHER", "FOOD"): icon = "CAFE"
+            is_end = kind in ("START", "END")
+            km = haversine_km(prev["lat"], prev["lng"], p["lat"], p["lng"]) * 1.3 if prev else 0
+            drive = f"{max(round(km / 45 * 60), 5)} นาที" if prev else "-"
+            stops.append({
+                "day": day, "time": f"{minutes // 60:02d}:{minutes % 60:02d}", "travel": drive, "icon": icon,
+                "name": p["name"], "cat": "จุดเริ่ม/จบ" if is_end else "แนะนำ", "lat": round(p["lat"], 6), "lng": round(p["lng"], 6),
+                "price": 0 if is_end else DEFAULT_PRICE.get(icon, 50),
+                "fuel": 0 if (is_end and kind == "START") else round(km / max(consumption, 1) * fuel_price),
+            })
+            prev = p
+    return stops
+
+
 def to_float(v, default):
     try:
         return float(v)
@@ -329,16 +401,21 @@ def plan_trip():
         payload = {"contents": [{"parts": [{"text": prompt}]}],
                    "generationConfig": {"maxOutputTokens": 8192, "temperature": 0.6}}
         resp = call_gemini(payload)
-        if resp is None:
-            return render_template("index.html", error="AI ใช้เวลาตอบนานเกินไป ลองกดสร้างแผนอีกครั้ง หรือลดจำนวนวันลง"), 504
-        if resp.status_code != 200:
+        notice = ""
+        use_fallback = resp is None or resp.status_code in (429, 500, 502, 503, 504)
+        if not use_fallback and resp.status_code != 200:
             try:
                 detail = resp.json().get("error", {}).get("message", "")
             except Exception:
                 detail = resp.text[:200]
-            if resp.status_code in (429, 503):
-                detail = "ตอนนี้มีคนใช้ Gemini จำนวนมาก ลองกดสร้างแผนอีกครั้งในอีกสักครู่"
             return render_template("index.html", error=f"AI ตอบกลับผิดพลาด (รหัส {resp.status_code}): {detail}"), 502
+
+        if use_fallback:
+            stops = build_fallback_plan(db, num_days, (s_name, s_lat, s_lng), (e_name, e_lat, e_lng),
+                                        start_time, end_time, consumption, fuel_price)
+            notice = "ตอนนี้ AI มีคนใช้งานหนาแน่น ระบบจึงจัดทริปให้จากรายการสถานที่แนะนำแทน กด 'วางแผนใหม่' ภายหลังเพื่อให้ AI จัดให้ได้"
+            return render_template("result.html", plan=stops, num_days=num_days, notice=notice,
+                                   daily_budget=daily_budget, maps_key=GOOGLE_MAPS_API_KEY)
 
         candidates = resp.json().get("candidates", [])
         if not candidates:
@@ -348,7 +425,7 @@ def plan_trip():
         if not stops:
             return render_template("index.html", error="AI ส่งข้อมูลมาในรูปแบบที่อ่านไม่ได้ ลองกดสร้างแผนอีกครั้ง"), 502
 
-        return render_template("result.html", plan=stops, num_days=num_days,
+        return render_template("result.html", plan=stops, num_days=num_days, notice="",
                                daily_budget=daily_budget, maps_key=GOOGLE_MAPS_API_KEY)
     except Exception as e:
         return render_template("index.html", error=f"เกิดข้อผิดพลาด: {e}"), 500
