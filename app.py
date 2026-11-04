@@ -6,7 +6,7 @@ import random
 import concurrent.futures
 
 import requests
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+from flask import Flask, render_template, request, jsonify, redirect, url_for, Response
 
 app = Flask(__name__)
 
@@ -429,6 +429,51 @@ def plan_trip():
                                daily_budget=daily_budget, maps_key=GOOGLE_MAPS_API_KEY)
     except Exception as e:
         return render_template("index.html", error=f"เกิดข้อผิดพลาด: {e}"), 500
+
+
+PHOTO_CACHE = {}  # ชื่อสถานที่ -> (bytes, content_type) หรือ None (ไม่มีรูป)
+
+
+@app.route("/api/photo")
+def place_photo():
+    """ดึงรูปสถานที่จาก Google Places ผ่านเซิร์ฟเวอร์ (คีย์ไม่โผล่ในหน้าเว็บ) พร้อมแคช"""
+    name = (request.args.get("name") or "").strip()[:100]
+    if not name:
+        return "", 404
+    if name not in PHOTO_CACHE:
+        hit, cacheable = None, True
+        try:
+            params = {"query": f"{name} กำแพงเพชร", "language": "th", "region": "th", "key": GOOGLE_MAPS_API_KEY}
+            lat, lng = request.args.get("lat"), request.args.get("lng")
+            if lat and lng:
+                params.update({"location": f"{lat},{lng}", "radius": 30000})
+            data = requests.get("https://maps.googleapis.com/maps/api/place/textsearch/json",
+                                params=params, timeout=5).json()
+            if data.get("status") not in ("OK", "ZERO_RESULTS"):
+                cacheable = False  # เช่น REQUEST_DENIED / โควตาเต็ม: ไม่แคชความล้มเหลว
+            for p in data.get("results", [])[:1]:
+                photos = p.get("photos") or []
+                if photos:
+                    img = requests.get("https://maps.googleapis.com/maps/api/place/photo",
+                                       params={"maxwidth": 480, "photo_reference": photos[0]["photo_reference"],
+                                               "key": GOOGLE_MAPS_API_KEY}, timeout=8)
+                    ctype = img.headers.get("Content-Type", "")
+                    if img.status_code == 200 and ctype.startswith("image"):
+                        hit = (img.content, ctype)
+                    else:
+                        cacheable = False
+        except Exception:
+            cacheable = False
+        if cacheable and len(PHOTO_CACHE) < 500:
+            PHOTO_CACHE[name] = hit
+        else:
+            return "", 404
+    hit = PHOTO_CACHE[name]
+    if not hit:
+        return "", 404
+    resp = Response(hit[0], mimetype=hit[1])
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
 
 
 @app.route("/api/chat", methods=["POST"])
