@@ -47,6 +47,12 @@ body{font-family:'IBM Plex Sans Thai',sans-serif;background:var(--sage);color:va
 .btn-moss:hover{background:#153629;color:#fff;}
 .btn-gold{background:var(--gold);color:#fff;border:0;border-radius:10px;padding:8px 16px;}
 .btn-gold:hover{background:#b0831f;color:#fff;}
+.photo{grid-column:1 / -1;position:relative;}
+.photo img{width:100%;height:140px;object-fit:cover;border-radius:10px;background:#e4efe8;display:block;}
+.photo small{position:absolute;right:8px;bottom:6px;background:rgba(0,0,0,.55);color:#fff;font-size:.65rem;padding:1px 7px;border-radius:6px;}
+.dist-row{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:.82rem;color:var(--stone);margin:-2px 2px 8px;}
+.dist-row a{color:var(--moss);font-weight:500;text-decoration:none;}
+.dist-row a:hover{text-decoration:underline;}
 .banner{display:none;background:#fff4d6;border:1px solid var(--gold);border-radius:10px;padding:8px 12px;margin-bottom:8px;font-size:.9rem;}
 #chatBtn{position:fixed;right:22px;bottom:22px;width:58px;height:58px;border-radius:50%;border:0;background:var(--moss);color:#fff;font-size:1.5rem;box-shadow:0 6px 18px rgba(0,0,0,.25);z-index:1000;}
 #chatBox{display:none;position:fixed;right:22px;bottom:92px;width:340px;max-width:92vw;height:440px;background:#fff;border:1.5px solid var(--moss);border-radius:14px;z-index:1000;flex-direction:column;overflow:hidden;}
@@ -110,9 +116,11 @@ const ICONS = {
 const DAY_COLORS = ['#1f4d3a','#c8962b','#2b6cb3','#a23b72'];
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const isEndpoint = n => /(เริ่มต้น|สิ้นสุด|เดินทาง|จุดเริ่ม)/.test(n);
+const photoUrl = (name, lat, lng) => '/api/photo?name=' + encodeURIComponent(name) + '&lat=' + lat + '&lng=' + lng;
 const baht = n => Math.round(n).toLocaleString('th-TH') + ' ฿';
 
-let filter = 'all', gmap, dirSvc, dirRender, markers = [], lines = [], adding = false;
+let filter = 'all', gmap, dirSvc, markers = [], lines = [], adding = false;
 
 /* ---------- วาดรายการ ---------- */
 function stopHTML(s) {
@@ -123,6 +131,7 @@ function stopHTML(s) {
       <div class="nm" onclick="focusStop(this)">${esc(s.name)}</div>
       <span class="cat">${esc(s.cat)}</span><a class="nav" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}">นำทาง</a>
     </div>
+    ${(!isEndpoint(s.name) && s.cat !== 'เพิ่มเอง') ? `<div class="photo"><img loading="lazy" src="${photoUrl(s.name, s.lat, s.lng)}" alt="${esc(s.name)}" onerror="this.parentNode.remove()"><small>รูปจาก Google Maps</small></div>` : ''}
     <div class="costs">
       <div><label>ค่าเข้า/อาหาร</label><input type="number" min="0" class="price" value="${s.price}" oninput="recalc()"></div>
       <div><label>ค่าน้ำมัน</label><input type="number" min="0" class="fuel" value="${s.fuel}" oninput="recalc()"></div>
@@ -132,7 +141,7 @@ function stopHTML(s) {
 }
 function makeStop(s) {
   const el = document.createElement('article');
-  el.className = 'stop'; el.dataset.lat = s.lat; el.dataset.lng = s.lng; el.dataset.name = s.name; el.dataset.icon = s.icon;
+  el.className = 'stop'; el.dataset.lat = s.lat; el.dataset.lng = s.lng; el.dataset.name = s.name; el.dataset.icon = s.icon; el.dataset.cat = s.cat;
   el.innerHTML = stopHTML(s);
   return el;
 }
@@ -142,7 +151,7 @@ function render() {
   days.forEach(d => {
     const sec = document.createElement('section');
     sec.className = 'day'; sec.dataset.day = d;
-    sec.innerHTML = `<div class="day-head"><h3 class="serif">วันที่ ${d}</h3><span class="dsum"></span></div><div class="stops"></div>`;
+    sec.innerHTML = `<div class="day-head"><h3 class="serif">วันที่ ${d}</h3><span class="dsum"></span></div><div class="dist-row"><span class="dist"></span><a class="gmlink" target="_blank" rel="noopener">เปิดเส้นทางวันนี้ใน Google Maps ↗</a></div><div class="stops"></div>`;
     PLAN.filter(s => s.day === d).forEach(s => sec.querySelector('.stops').appendChild(makeStop(s)));
     $('plan').appendChild(sec);
   });
@@ -150,7 +159,7 @@ function render() {
     $('tabs').innerHTML = `<button class="on" onclick="setFilter('all',this)">ทั้งหมด</button>` +
       days.map(d => `<button onclick="setFilter('${d}',this)">วันที่ ${d}</button>`).join('');
   } else { $('tabs').style.display = 'none'; filter = String(days[0] || 1); }
-  recalc();
+  recalc(); updateLinks();
 }
 function setFilter(f, btn) {
   filter = f;
@@ -189,70 +198,94 @@ function del(btn) {
 }
 
 /* ---------- แผนที่ ---------- */
+let renderers = [], drawId = 0;
 function visibleSections() { return [...document.querySelectorAll('.day')].filter(s => s.style.display !== 'none'); }
 function clearMap() {
   markers.forEach(m => m.setMap(null)); markers = [];
   lines.forEach(l => l.setMap(null)); lines = [];
-  dirRender.setDirections({ routes: [] });
+  renderers.forEach(r => r.setMap(null)); renderers = [];
 }
 function pos(st) { return { lat: parseFloat(st.dataset.lat), lng: parseFloat(st.dataset.lng) }; }
 
-function draw() {
-  if (!gmap) return;
-  clearMap();
-  $('routeInfo').textContent = '';
-  const secs = visibleSections(), bounds = new google.maps.LatLngBounds();
-  const single = secs.length === 1;
-  $('optBtn').style.display = single ? '' : 'none';
-
-  secs.forEach(sec => {
-    const d = parseInt(sec.dataset.day, 10), color = DAY_COLORS[(d - 1) % DAY_COLORS.length];
-    const stops = [...sec.querySelectorAll('.stop')], path = [];
-    stops.forEach((st, i) => {
-      const p = pos(st); if (isNaN(p.lat) || isNaN(p.lng)) return;
-      path.push(p); bounds.extend(p);
-      const m = new google.maps.Marker({
-        position: p, map: gmap, title: st.dataset.name,
-        label: { text: String(i + 1), color: '#fff', fontWeight: '600' },
-        icon: { path: google.maps.SymbolPath.CIRCLE, scale: 14, fillColor: color, fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2 }
-      });
-      const iw = new google.maps.InfoWindow({ content: `<b>${esc(st.dataset.name)}</b>` });
-      m.addListener('click', () => iw.open(gmap, m));
-      st._marker = m; markers.push(m);
-    });
-    if (!single && path.length > 1) {
-      lines.push(new google.maps.Polyline({ path, map: gmap, strokeColor: color, strokeOpacity: .85, strokeWeight: 4 }));
-    }
-  });
-  if (!bounds.isEmpty()) gmap.fitBounds(bounds, 40);
-  if (single) route(secs[0], false);
+// ลิงก์เปิดเส้นทางของวันนั้นในแอป/เว็บ Google Maps (รองรับจุดแวะระหว่างทางไม่เกิน 9 จุด)
+function gmapsLink(sec) {
+  const p = [...sec.querySelectorAll('.stop')].map(s => s.dataset.lat + ',' + s.dataset.lng);
+  if (p.length < 2) return '#';
+  const mid = p.slice(1, -1).slice(0, 9).join('|');
+  return 'https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=' + p[0] +
+         '&destination=' + p[p.length - 1] + (mid ? '&waypoints=' + encodeURIComponent(mid) : '');
 }
+function updateLinks() { document.querySelectorAll('.day').forEach(sec => { sec.querySelector('.gmlink').href = gmapsLink(sec); }); }
 
-function route(sec, optimize, cb) {
+function routeDay(sec, color, optimize, isStale, cb) {
   const stops = [...sec.querySelectorAll('.stop')];
-  if (stops.length < 2) return;
+  if (stops.length < 2) return cb({ ok: true, m: 0, s: 0, order: [], stops });
   const wp = stops.slice(1, -1).slice(0, 23).map(s => ({ location: pos(s), stopover: true }));
   dirSvc.route({
     origin: pos(stops[0]), destination: pos(stops[stops.length - 1]), waypoints: wp,
     optimizeWaypoints: optimize, travelMode: google.maps.TravelMode.DRIVING
   }, (res, status) => {
+    if (isStale()) return;
     if (status === 'OK') {
-      dirRender.setDirections(res);
       let m = 0, s = 0; res.routes[0].legs.forEach(l => { m += l.distance.value; s += l.duration.value; });
-      $('routeInfo').textContent = `ระยะทางรวม ประมาณ ${(m / 1000).toFixed(1)} กม. ขับรถรวม ประมาณ ${Math.round(s / 60)} นาที`;
-      if (cb) cb(res.routes[0].waypoint_order, stops);
+      if (!optimize) {
+        const r = new google.maps.DirectionsRenderer({ map: gmap, suppressMarkers: true, preserveViewport: true,
+          polylineOptions: { strokeColor: color, strokeWeight: 6, strokeOpacity: .85 } });
+        r.setDirections(res); renderers.push(r);
+      }
+      cb({ ok: true, m, s, order: res.routes[0].waypoint_order, stops });
     } else {
-      $('routeInfo').textContent = 'คำนวณเส้นทางถนนไม่ได้ (' + status + ') แสดงเฉพาะหมุดบนแผนที่';
-      lines.push(new google.maps.Polyline({ path: stops.map(pos), map: gmap, strokeColor: '#c8962b', strokeWeight: 3, strokeOpacity: .8 }));
+      if (!optimize) lines.push(new google.maps.Polyline({ path: stops.map(pos), map: gmap, strokeColor: color, strokeOpacity: .8, strokeWeight: 4 }));
+      cb({ ok: false, status, stops });
     }
   });
 }
+
+function draw() {
+  if (!gmap) return;
+  clearMap(); updateLinks();
+  const myId = ++drawId, stale = () => myId !== drawId;
+  const secs = visibleSections(), bounds = new google.maps.LatLngBounds();
+  $('optBtn').style.display = secs.length === 1 ? '' : 'none';
+  $('routeInfo').textContent = 'กำลังคำนวณเส้นทาง...';
+  const tot = { m: 0, s: 0, pending: secs.length, fail: false };
+
+  secs.forEach(sec => {
+    const d = parseInt(sec.dataset.day, 10), color = DAY_COLORS[(d - 1) % DAY_COLORS.length];
+    [...sec.querySelectorAll('.stop')].forEach((st, i) => {
+      const p = pos(st); if (isNaN(p.lat) || isNaN(p.lng)) return;
+      bounds.extend(p);
+      const m = new google.maps.Marker({
+        position: p, map: gmap, title: st.dataset.name,
+        label: { text: String(i + 1), color: '#fff', fontWeight: '600' },
+        icon: { path: google.maps.SymbolPath.CIRCLE, scale: 14, fillColor: color, fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2 }
+      });
+      const photo = (isEndpoint(st.dataset.name) || st.dataset.cat === 'เพิ่มเอง') ? '' :
+        `<img src="${photoUrl(st.dataset.name, p.lat, p.lng)}" style="width:180px;height:110px;object-fit:cover;border-radius:8px;display:block;margin-bottom:6px" onerror="this.remove()" alt="">`;
+      const iw = new google.maps.InfoWindow({ content: `<div style="max-width:190px">${photo}<b>${esc(st.dataset.name)}</b><div style="color:#66776c;font-size:12px">วันที่ ${d} · คิวที่ ${i + 1}</div></div>` });
+      m.addListener('click', () => iw.open(gmap, m));
+      st._marker = m; markers.push(m);
+    });
+
+    routeDay(sec, color, false, stale, r => {
+      const dist = sec.querySelector('.dist');
+      if (r.ok) { tot.m += r.m; tot.s += r.s; dist.textContent = r.m ? `ระยะทาง ~${(r.m / 1000).toFixed(1)} กม. · ขับรถ ~${Math.round(r.s / 60)} นาที` : ''; }
+      else { tot.fail = true; dist.textContent = 'คำนวณเส้นทางถนนไม่ได้ (' + r.status + ') แสดงเส้นประแทน'; }
+      if (--tot.pending === 0) {
+        $('routeInfo').textContent = (secs.length > 1 ? 'รวมทุกวัน' : 'ระยะทางรวม') + ` ~${(tot.m / 1000).toFixed(1)} กม. · ขับรถ ~${Math.round(tot.s / 60)} นาที` + (tot.fail ? ' (บางวันคำนวณถนนไม่ได้)' : '');
+      }
+    });
+  });
+  if (!bounds.isEmpty()) gmap.fitBounds(bounds, 40);
+}
+
 function optimizeDay() {
   const sec = visibleSections()[0]; if (!sec) return;
   $('routeInfo').textContent = 'กำลังคำนวณ...';
-  route(sec, true, (order, stops) => {
-    const mid = stops.slice(1, -1), last = stops[stops.length - 1];
-    order.forEach(i => last.parentNode.insertBefore(mid[i], last));
+  routeDay(sec, '#1f4d3a', true, () => false, r => {
+    if (!r.ok) { $('routeInfo').textContent = 'จัดเส้นทางไม่สำเร็จ (' + r.status + ')'; return; }
+    const mid = r.stops.slice(1, -1), last = r.stops[r.stops.length - 1];
+    r.order.forEach(i => last.parentNode.insertBefore(mid[i], last));
     recalc(); draw();
   });
 }
@@ -268,8 +301,6 @@ function cancelAdd() { adding = false; $('banner').style.display = 'none'; gmap 
 function initMap() {
   gmap = new google.maps.Map($('map'), { zoom: 11, center: { lat: 16.4828, lng: 99.5227 }, gestureHandling: 'greedy', streetViewControl: false });
   dirSvc = new google.maps.DirectionsService();
-  dirRender = new google.maps.DirectionsRenderer({ map: gmap, suppressMarkers: true, preserveViewport: true,
-    polylineOptions: { strokeColor: '#1f4d3a', strokeWeight: 6, strokeOpacity: .8 } });
   gmap.addListener('click', e => {
     if (!adding) return;
     const name = prompt('ชื่อจุดแวะนี้คืออะไร?'); if (!name) return cancelAdd();
