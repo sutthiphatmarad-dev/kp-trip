@@ -284,8 +284,8 @@ def build_fallback_plan(db, num_days, start, end, start_time, end_time, consumpt
     t0, t1 = hm(start_time, 540), hm(end_time, 1080)
     used, stops = set(), []
     for day in range(1, num_days + 1):
-        near_nature = [p for p in nature if haversine_km(start[1], start[2], p["lat"], p["lng"]) <= 50]
-        use_nature = day % 2 == 1 and near_nature
+        near_nature = [p for p in nature if haversine_km(start[1], start[2], p["lat"], p["lng"]) <= FAR_KM + 10]
+        use_nature = bool(near_nature)
         seq = [("main", main), ("meal", meals), ("nature" if use_nature else "main", near_nature if use_nature else main),
                ("cafe", cafes or meals), ("main", main)]
         picks = [("START", {"name": f"เริ่มต้นเดินทาง: {start[0]}", "lat": start[1], "lng": start[2]})]
@@ -315,6 +315,133 @@ def build_fallback_plan(db, num_days, start, end, start_time, end_time, consumpt
             })
             prev = p
     return stops
+
+
+
+DISTRICTS = ["เมืองกำแพงเพชร", "คลองลาน", "ขาณุวรลักษบุรี", "ลานกระบือ", "ปางศิลาทอง", "พรานกระต่าย",
+             "คลองขลุง", "ไทรงาม", "โกสัมพีนคร", "บึงสามัคคี", "ทรายทองวัฒนา"]
+SKIP_TYPES = {"lodging", "gas_station", "car_repair", "atm", "bank", "school", "hospital",
+              "local_government_office", "police", "store", "convenience_store"}
+ENDPOINT_RE = re.compile(r"(เริ่มต้น|สิ้นสุด|เดินทาง|จุดเริ่ม)")
+CITY_KM = 12   # ใกล้จุดเริ่มต้นไม่เกินนี้ = "ในเมือง"
+FAR_KM = 45    # ไกลกว่านี้ = ต้องใช้เวลาครึ่งวันขึ้นไป
+
+
+def fetch_places_raw(keyword):
+    """ค้นหาสถานที่ คืนเป็น list ของ dict (แคชไว้) ใช้รวบรวมสถานที่ทั้งจังหวัด"""
+    key = "raw:" + keyword
+    if key in API_CACHE:
+        return API_CACHE[key]
+    try:
+        data = requests.get(
+            "https://maps.googleapis.com/maps/api/place/textsearch/json",
+            params={"query": keyword, "language": "th", "region": "th", "key": GOOGLE_MAPS_API_KEY},
+            timeout=6,
+        ).json()
+        if data.get("status") not in ("OK", "ZERO_RESULTS"):
+            return []
+        out = []
+        for p in data.get("results", []):
+            addr = p.get("formatted_address", "").lower()
+            if "กำแพง" not in addr and "kamphaeng" not in addr:
+                continue
+            if SKIP_TYPES & set(p.get("types", [])):
+                continue
+            n = p.get("user_ratings_total", 0)
+            rating = p.get("rating")
+            # ที่เที่ยวนอกเมืองมักมีรีวิวน้อย จึงรับตั้งแต่ 1 รีวิว (เดิมตัดที่ <=3 ทำให้หลุดเกือบหมด)
+            if n < 1 or (rating is not None and rating < 3.5):
+                continue
+            loc = p["geometry"]["location"]
+            out.append({"name": p.get("name", ""), "rating": rating, "n": n, "lat": loc["lat"], "lng": loc["lng"]})
+        API_CACHE[key] = out
+        return out
+    except Exception:
+        return []
+
+
+def build_attraction_db(raw_lists, s_lat, s_lng):
+    """รวมสถานที่จากทุกอำเภอ แบ่งโซนตามระยะจากจุดเริ่มต้น
+    คืน (ข้อความหมวดในเมือง, ข้อความหมวดรอบเมือง/ไกล, list สถานที่นอกเมือง)"""
+    seen, items = set(), []
+    for lst in raw_lists:
+        for p in lst:
+            if not p["name"] or p["name"] in seen:
+                continue
+            seen.add(p["name"])
+            q = dict(p)
+            q["km"] = haversine_km(s_lat, s_lng, p["lat"], p["lng"])
+            items.append(q)
+
+    def score(p):
+        return (p["rating"] or 3.8) * math.log(p["n"] + 2)
+
+    def pick(lo, hi, k):
+        grp = sorted([p for p in items if lo <= p["km"] < hi], key=score, reverse=True)[:k * 2]
+        random.shuffle(grp)  # สลับให้แต่ละครั้งได้ที่ไม่ซ้ำเดิม
+        return grp[:k]
+
+    city, mid, far = pick(0, CITY_KM, 12), pick(CITY_KM, FAR_KM, 14), pick(FAR_KM, 400, 6)
+
+    def fmt(p, zone):
+        return f"- {p['name']} (⭐ {p['rating'] or '-'}) | พิกัด: {p['lat']}, {p['lng']} | ห่างจุดเริ่ม {p['km']:.0f} กม. | {zone}"
+
+    city_txt = "\n".join(fmt(p, "ในเมือง") for p in city)
+    out_txt = "\n".join([fmt(p, "รอบเมือง") for p in mid] + [fmt(p, "ไกล (ต้องใช้เวลาครึ่งวันขึ้นไป)") for p in far])
+    return city_txt, out_txt, mid + far
+
+
+def recompute_fuel(stops, consumption, fuel_price):
+    prev = {}
+    for s in stops:
+        d = s["day"]
+        if d in prev and not ENDPOINT_RE.search(s["name"]):
+            km = haversine_km(prev[d][0], prev[d][1], s["lat"], s["lng"]) * 1.3
+            s["fuel"] = round(km / max(consumption, 1) * fuel_price)
+        prev[d] = (s["lat"], s["lng"])
+
+
+def ensure_outside(stops, pool, start, consumption, fuel_price, min_out):
+    """ตรวจหลัง AI จัดเสร็จ: ถ้าวันไหนมีที่เที่ยวนอกเมืองน้อยกว่า min_out ให้สลับที่เที่ยวในเมืองออก
+    แล้วใส่สถานที่นอกเมืองที่ยังไม่ได้ใช้แทน (ไม่แตะร้านอาหาร/คาเฟ่/จุดเริ่ม-จบ)"""
+    if not pool:
+        return stops, False
+    used = {s["name"] for s in stops}
+    changed = False
+    for day in sorted({s["day"] for s in stops}):
+        day_stops = [s for s in stops if s["day"] == day]
+        def is_out(s):
+            return haversine_km(start[0], start[1], s["lat"], s["lng"]) > CITY_KM
+        sights = [s for s in day_stops if not ENDPOINT_RE.search(s["name"]) and s["icon"] not in ("FOOD", "CAFE", "HOTEL")]
+        need = min_out - sum(1 for s in sights if is_out(s))
+        swappable = [s for s in reversed(sights) if not is_out(s)]
+        for _ in range(max(need, 0)):
+            free = [p for p in pool if p["name"] not in used]
+            if not free or not swappable:
+                break
+            target = swappable.pop(0)
+            # เลือกใกล้ที่เที่ยวนอกเมืองอื่นของวันนั้นก่อน เพื่อไม่ให้ขับวนไปมา
+            anchors = [s for s in sights if is_out(s)]
+            ref = (anchors[0]["lat"], anchors[0]["lng"]) if anchors else (start[0], start[1])
+            new = min(free, key=lambda p: haversine_km(ref[0], ref[1], p["lat"], p["lng"]))
+            used.add(new["name"])
+            target.update({"name": new["name"], "lat": round(new["lat"], 6), "lng": round(new["lng"], 6),
+                           "icon": guess_icon(new["name"]) if guess_icon(new["name"]) not in ("OTHER", "FOOD", "CAFE") else "NATURE",
+                           "cat": "แนะนำนอกเมือง"})
+            target["price"] = DEFAULT_PRICE.get(target["icon"], 50)
+            changed = True
+    if changed:
+        recompute_fuel(stops, consumption, fuel_price)
+    return stops, changed
+
+
+def hours_between(a, b):
+    try:
+        h1, m1 = a.split(":")[:2]
+        h2, m2 = b.split(":")[:2]
+        return max((int(h2) * 60 + int(m2) - int(h1) * 60 - int(m1)) / 60, 1)
+    except Exception:
+        return 9
 
 
 def to_float(v, default):
@@ -353,16 +480,29 @@ def plan_trip():
         end_raw = (f.get("end_loc") or "").strip()
         e_name, e_lat, e_lng = parse_location(end_raw) if end_raw else (s_name, s_lat, s_lng)
 
-        queries = [
-            f"ที่เที่ยว {str_places} สถานที่ลับ Unseen กำแพงเพชร",
-            "อุทยาน ธรรมชาติ น้ำตก จุดชมวิว กำแพงเพชร",
-            f"ร้านอาหาร คาเฟ่ ร้านลับ โลคอล {str_foods} กำแพงเพชร",
-            "โรงแรม รีสอร์ท โฮมสเตย์ กำแพงเพชร",
-        ]
-        with concurrent.futures.ThreadPoolExecutor() as ex:
-            res = list(ex.map(fetch_live_places, queries))
-        fallbacks = [FALLBACK_MAIN, FALLBACK_NATURE, FALLBACK_FOOD, FALLBACK_HOTEL]
-        db = [r if "ไม่มีข้อมูล" not in r else fb for r, fb in zip(res, fallbacks)]
+        attraction_queries = (
+            [f"ที่เที่ยว {str_places} กำแพงเพชร", "สถานที่ลับ Unseen เที่ยวธรรมชาติ กำแพงเพชร",
+             "น้ำตก อุทยานแห่งชาติ กำแพงเพชร", "วัด โบราณสถาน กำแพงเพชร",
+             "จุดชมวิว สวน ฟาร์ม ท่องเที่ยวเชิงเกษตร กำแพงเพชร"]
+            + [f"สถานที่ท่องเที่ยว อำเภอ{d} จังหวัดกำแพงเพชร" for d in DISTRICTS]
+        )
+        fh_queries = [f"ร้านอาหาร คาเฟ่ ร้านลับ โลคอล {str_foods} กำแพงเพชร",
+                      "โรงแรม รีสอร์ท โฮมสเตย์ กำแพงเพชร"]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+            f_attr = [ex.submit(fetch_places_raw, q) for q in attraction_queries]
+            f_fh = [ex.submit(fetch_live_places, q) for q in fh_queries]
+            raw_lists = [x.result() for x in f_attr]
+            food_txt, hotel_txt = (x.result() for x in f_fh)
+
+        city_txt, out_txt, outside_pool = build_attraction_db(raw_lists, s_lat, s_lng)
+        db = [city_txt or FALLBACK_MAIN,
+              out_txt or FALLBACK_NATURE,
+              food_txt if "ไม่มีข้อมูล" not in food_txt else FALLBACK_FOOD,
+              hotel_txt if "ไม่มีข้อมูล" not in hotel_txt else FALLBACK_HOTEL]
+        if not outside_pool:
+            outside_pool = parse_db_places(FALLBACK_NATURE)
+        trip_hours = hours_between(start_time, end_time)
+        min_out = 2 if trip_hours >= 7 else 1
 
         routing = "".join(
             f"[DAY_{i}] เริ่ม: '{s_name}' (พิกัด: {s_lat}, {s_lng}), จบ: '{e_name}' (พิกัด: {e_lat}, {e_lng}), "
@@ -375,9 +515,9 @@ def plan_trip():
         ห้ามอธิบาย ห้ามใส่หัวตาราง ตอบเป็นข้อมูลดิบ | คั่นเท่านั้น!
 
         [ฐานข้อมูลสถานที่]
-        (หมวด 1: ที่เที่ยวในเมือง/Unseen)
+        (หมวด 1: ที่เที่ยวในเมือง/ใกล้จุดเริ่มต้น)
         {db[0]}
-        (หมวด 2: ธรรมชาติ/นอกเมือง)
+        (หมวด 2: นอกเมือง: รอบเมือง/ไกล พร้อมระยะห่างจากจุดเริ่ม)
         {db[1]}
         (หมวด 3: ร้านอาหาร/คาเฟ่/ร้านลับโลคอล)
         {db[2]}
@@ -389,14 +529,19 @@ def plan_trip():
         [จุดบังคับรายวัน]
         {routing}
 
+        [ชั่วโมงเที่ยวต่อวัน] ประมาณ {trip_hours:.0f} ชั่วโมง
+
         [คำสั่งบังคับ]
         1. เลือกสถานที่จากฐานข้อมูลเท่านั้น และห้ามใช้สถานที่ซ้ำข้ามวัน
-        2. ผสมสถานที่ดังกับสถานที่แปลกใหม่ (Unseen) / ร้านโลคอลลับ
-        3. 1 วันมี 6-8 คิว เรียงตามเวลา: เริ่ม -> เที่ยว -> กิน -> ธรรมชาติ/เที่ยวลับ -> คาเฟ่ -> จบ
-        4. คิวแรกของวันคือจุดเริ่มต้น คิวสุดท้ายคือจุดสิ้นสุด ใช้ชื่อและพิกัดตามที่บังคับ (ชื่อควรมีคำว่า "เริ่มต้น" หรือ "สิ้นสุด")
-        5. ระยะเวลาขับรถให้กะตามจริง (เช่น 20 นาที, 1 ชม.) ห้ามใส่ 0 นาทีรวด
-        6. รหัสไอคอนเลือกจาก: ICON_TEMPLE ICON_HISTORY ICON_NATURE ICON_FOOD ICON_CAFE ICON_MARKET ICON_HOTEL ICON_OTHER
-        7. รูปแบบ: DAY_X | เวลา | ระยะเวลาขับรถ | รหัสไอคอน | ชื่อสถานที่ | ประเภท | พิกัดLat | พิกัดLng
+        2. ห้ามเลือกแต่ในเมือง! ทุกวันต้องมีที่เที่ยวจากหมวด 2 (นอกเมือง) อย่างน้อย {min_out} แห่ง
+        3. แต่ละวันเลือกคิวที่อยู่โซนเดียวกันเป็นหลัก (ดูจากพิกัดและระยะห่าง) เพื่อไม่ให้ขับวนไปมา เช่น วันหนึ่งไปทางคลองลาน อีกวันไปทางขาณุวรลักษบุรี
+        4. สถานที่ป้าย "ไกล" ใช้ได้เฉพาะวันที่มีเวลาเที่ยว 8 ชั่วโมงขึ้นไป และไม่เกินวันละ 1 แห่ง เวลาขับรถรวมต่อวันไม่ควรเกิน 3 ชั่วโมง
+        5. ผสมสถานที่ดังกับที่แปลกใหม่ (Unseen) และร้านโลคอลลับ
+        6. 1 วันมี 6-8 คิว เรียงตามเวลา: เริ่ม -> เที่ยว -> กิน -> เที่ยวนอกเมือง/ธรรมชาติ -> คาเฟ่ -> จบ
+        7. คิวแรกของวันคือจุดเริ่มต้น คิวสุดท้ายคือจุดสิ้นสุด ใช้ชื่อและพิกัดตามที่บังคับ (ชื่อควรมีคำว่า "เริ่มต้น" หรือ "สิ้นสุด")
+        8. ระยะเวลาขับรถให้กะตามจริง (เช่น 20 นาที, 1 ชม.) ห้ามใส่ 0 นาทีรวด
+        9. รหัสไอคอนเลือกจาก: ICON_TEMPLE ICON_HISTORY ICON_NATURE ICON_FOOD ICON_CAFE ICON_MARKET ICON_HOTEL ICON_OTHER
+        10. รูปแบบ: DAY_X | เวลา | ระยะเวลาขับรถ | รหัสไอคอน | ชื่อสถานที่ | ประเภท | พิกัดLat | พิกัดLng
         """
         payload = {"contents": [{"parts": [{"text": prompt}]}],
                    "generationConfig": {"maxOutputTokens": 8192, "temperature": 0.6}}
@@ -424,6 +569,7 @@ def plan_trip():
         stops = parse_plan(candidates[0]["content"]["parts"][0]["text"], consumption, fuel_price)
         if not stops:
             return render_template("index.html", error="AI ส่งข้อมูลมาในรูปแบบที่อ่านไม่ได้ ลองกดสร้างแผนอีกครั้ง"), 502
+        stops, _ = ensure_outside(stops, outside_pool, (s_lat, s_lng), consumption, fuel_price, min_out)
 
         return render_template("result.html", plan=stops, num_days=num_days, notice="",
                                daily_budget=daily_budget, maps_key=GOOGLE_MAPS_API_KEY)
